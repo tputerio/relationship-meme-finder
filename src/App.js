@@ -42,7 +42,9 @@ const App = () => {
 
   const [sessionSpend, setSessionSpend] = useState(0);
   const [resultsPerAccount, setResultsPerAccount] = useState(5);
+  const [resultsPerAccountInput, setResultsPerAccountInput] = useState('5');
   const [timeValue, setTimeValue] = useState(1);
+  const [timeValueInput, setTimeValueInput] = useState('1');
   const [timeUnit, setTimeUnit] = useState('months');
   const [activeUsernames, setActiveUsernames] = useState([]);
   const [accountLibrary, setAccountLibrary] = useState([]);
@@ -85,8 +87,12 @@ const App = () => {
       if (docSnap.exists()) {
         const d = docSnap.data();
         setSessionSpend(d.sessionSpend || 0);
-        setResultsPerAccount(d.resultsPerAccount || 5);
-        setTimeValue(d.timeValue || 1);
+        const resultsValue = d.resultsPerAccount ?? 5;
+        setResultsPerAccount(resultsValue);
+        setResultsPerAccountInput(String(resultsValue));
+        const lookbackValue = d.timeValue ?? 1;
+        setTimeValue(lookbackValue);
+        setTimeValueInput(String(lookbackValue));
         setTimeUnit(d.timeUnit || 'months');
         setActiveUsernames(d.activeUsernames || []);
         setAccountLibrary(d.accountLibrary || []);
@@ -104,6 +110,18 @@ const App = () => {
   const updateCloud = async (newData) => {
     if (!user) return;
     await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config'), newData);
+  };
+
+  const setResultsPerAccountAndSave = async (value) => {
+    setResultsPerAccount(value);
+    setResultsPerAccountInput(String(value));
+    await updateCloud({ resultsPerAccount: value });
+  };
+
+  const setTimeValueAndSave = async (value) => {
+    setTimeValue(value);
+    setTimeValueInput(String(value));
+    await updateCloud({ timeValue: value });
   };
 
   const fetchMemes = async () => {
@@ -269,8 +287,20 @@ const App = () => {
                 <div className="flex gap-2 mb-3">
                   <input 
                     type="number" 
-                    value={timeValue} 
-                    onChange={(e) => updateCloud({ timeValue: parseInt(e.target.value) || 1 })} 
+                    value={timeValueInput} 
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      setTimeValueInput(nextValue);
+                      const parsed = parseInt(nextValue, 10);
+                      if (!Number.isNaN(parsed) && parsed > 0) {
+                        setTimeValue(parsed);
+                      }
+                    }}
+                    onBlur={() => {
+                      const parsed = parseInt(timeValueInput, 10);
+                      const valid = !Number.isNaN(parsed) && parsed > 0 ? parsed : 1;
+                      setTimeValueAndSave(valid);
+                    }}
                     className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-1/3 font-black text-lg outline-none text-center" 
                     style={{ fontSize: '16px' }}
                   />
@@ -290,10 +320,22 @@ const App = () => {
               <div>
                 <label className="text-[10px] font-black text-slate-500 uppercase mb-3 block tracking-widest">Posts per Account</label>
                 <input 
-                  type="text" 
+                  type="number" 
                   inputMode="numeric"
-                  value={resultsPerAccount} 
-                  onChange={(e) => updateCloud({ resultsPerAccount: e.target.value === '' ? '' : parseInt(e.target.value) })} 
+                  value={resultsPerAccountInput} 
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setResultsPerAccountInput(nextValue);
+                    const parsed = parseInt(nextValue, 10);
+                    if (!Number.isNaN(parsed) && parsed > 0) {
+                      setResultsPerAccount(parsed);
+                    }
+                  }}
+                  onBlur={() => {
+                    const parsed = parseInt(resultsPerAccountInput, 10);
+                    const valid = !Number.isNaN(parsed) && parsed > 0 ? parsed : 5;
+                    setResultsPerAccountAndSave(valid);
+                  }}
                   className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full font-black text-xl outline-none focus:border-emerald-500" 
                   style={{ fontSize: '16px' }}
                 />
@@ -356,7 +398,16 @@ const App = () => {
                     <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
                     <span className="font-black text-[10px] text-white uppercase tracking-tight">@{meme.ownerUsername}</span>
                   </div>
-                  <span className="text-[9px] font-black text-slate-600 italic">RANK #{idx+1}</span>
+                  <span className="text-[9px] font-black text-slate-600 italic">
+                    RANK #{idx+1}
+                    {meme.timestamp && (() => {
+                      const date = new Date(meme.timestamp);
+                      if (!Number.isNaN(date.getTime())) {
+                        return ` • ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+                      }
+                      return '';
+                    })()}
+                  </span>
                 </div>
                 <div className="aspect-square bg-black overflow-hidden">
                   <img 
