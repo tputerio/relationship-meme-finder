@@ -49,6 +49,9 @@ const App = () => {
   const [activeUsernames, setActiveUsernames] = useState([]);
   const [accountLibrary, setAccountLibrary] = useState([]);
 
+  // TEMPORARY CODE: For pulling from existing Apify run
+  const existingRunId = "6S7I0Io5onwLhEIlf";
+
   useEffect(() => {
     signInAnonymously(auth).catch(console.error);
     return onAuthStateChanged(auth, setUser);
@@ -184,6 +187,46 @@ const App = () => {
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e) {
       setError("Failed to fetch results.");
+    } finally {
+      setLoading(false);
+      setStatus("");
+    }
+  };
+
+  // TEMPORARY CODE: Fetch from existing Apify run
+  const fetchFromExistingRun = async () => {
+    if (!apifyToken) return;
+    setLoading(true);
+    setError(null);
+    setStatus("Fetching existing run data...");
+
+    try {
+      // Get run details to find datasetId
+      const runRes = await fetch(`https://api.apify.com/v2/actor-runs/${existingRunId}?token=${apifyToken}`);
+      const runData = await runRes.json();
+      if (runData.data && runData.data.defaultDatasetId) {
+        const datasetId = runData.data.defaultDatasetId;
+        // Now fetch the dataset
+        const res = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?token=${apifyToken}`);
+        const items = await res.json();
+        const now = new Date();
+        let cutoff = new Date();
+        if (timeUnit === 'days') cutoff.setDate(now.getDate() - timeValue);
+        else if (timeUnit === 'weeks') cutoff.setDate(now.getDate() - (timeValue * 7));
+        else if (timeUnit === 'months') cutoff.setMonth(now.getMonth() - timeValue);
+
+        const sorted = items
+          .filter(i => new Date(i.timestamp) >= cutoff)
+          .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
+
+        // Since it's existing data, don't charge cost again
+        setData(sorted);
+        setLastUpdated(new Date().toLocaleTimeString());
+      } else {
+        setError("Failed to get dataset from existing run.");
+      }
+    } catch (e) {
+      setError("Failed to fetch from existing run.");
     } finally {
       setLoading(false);
       setStatus("");
@@ -358,10 +401,19 @@ const App = () => {
             <button 
               onClick={fetchMemes} 
               disabled={loading || activeUsernames.length === 0} 
-              className="w-full bg-emerald-500 text-slate-950 py-4 lg:py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+              className="w-full bg-emerald-500 text-slate-950 py-4 lg:py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 mb-4"
             >
               {loading ? <Loader2 className="animate-spin" size={20} /> : <RefreshCw size={20} />}
               <span className="tracking-widest text-xs uppercase">{loading ? "SCANNING..." : "START SCAN"}</span>
+            </button>
+            {/* TEMPORARY CODE: Button to fetch from existing run */}
+            <button 
+              onClick={fetchFromExistingRun} 
+              disabled={loading} 
+              className="w-full bg-blue-500 text-slate-950 py-4 lg:py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+            >
+              {loading ? <Loader2 className="animate-spin" size={20} /> : <RefreshCw size={20} />}
+              <span className="tracking-widest text-xs uppercase">{loading ? "FETCHING..." : "FETCH EXISTING RUN"}</span>
             </button>
           </div>
         </div>
