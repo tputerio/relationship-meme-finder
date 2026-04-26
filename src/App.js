@@ -25,7 +25,7 @@ const db = getFirestore(app);
 const appId = "relationship-meme-finder";
 
 // CHANGE THIS TO YOUR DESIRED PASSWORD
-const ACCESS_PASSWORD = "your-secure-password-here"; 
+const ACCESS_PASSWORD = "timiscool"; 
 const COST_PER_1000 = 1.70;
 
 const App = () => {
