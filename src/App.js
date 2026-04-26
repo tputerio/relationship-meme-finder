@@ -24,8 +24,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = "relationship-meme-finder";
 
-// CHANGE THIS TO YOUR DESIRED PASSWORD
-const ACCESS_PASSWORD = "timiscool"; 
 const COST_PER_1000 = 1.70;
 
 const App = () => {
@@ -50,27 +48,41 @@ const App = () => {
   const [accountLibrary, setAccountLibrary] = useState([]);
 
   useEffect(() => {
+    // Initial anonymous sign in to allow database access based on rules
     signInAnonymously(auth).catch(console.error);
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // Fetch Secret Apify Token from DB once unlocked
+  // Secure Unlock: Compare input with the password stored in Firestore
   const unlockApp = async (e) => {
     e.preventDefault();
-    if (passwordInput === ACCESS_PASSWORD) {
-      try {
-        const secretSnap = await getDoc(doc(db, 'secrets', 'apify'));
-        if (secretSnap.exists()) {
-          setApifyToken(secretSnap.data().token);
+    if (!user) {
+      alert("Authentication not initialized. Please refresh.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const secretSnap = await getDoc(doc(db, 'secrets', 'apify'));
+      
+      if (secretSnap.exists()) {
+        const remotePassword = secretSnap.data().password;
+        const token = secretSnap.data().token;
+
+        if (passwordInput === remotePassword) {
+          setApifyToken(token);
           setIsUnlocked(true);
+          setError(null);
         } else {
-          setError("Secret token not found in database.");
+          alert("Incorrect Password");
         }
-      } catch (err) {
-        setError("Database permission denied.");
+      } else {
+        setError("Security configuration missing in database.");
       }
-    } else {
-      alert("Incorrect Password");
+    } catch (err) {
+      setError("Access denied. Check Firestore rules.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -93,7 +105,7 @@ const App = () => {
           accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays"]
         });
       }
-    });
+    }, (err) => console.error("Firestore Error:", err));
     return () => unsub();
   }, [user]);
 
@@ -183,9 +195,15 @@ const App = () => {
             placeholder="Enter Password"
             className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center text-white outline-none focus:border-emerald-500 mb-4 font-black"
           />
-          <button type="submit" className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl hover:bg-emerald-400 transition-all uppercase tracking-widest text-xs">
-            Unlock Interface
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl hover:bg-emerald-400 disabled:opacity-50 transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2"
+          >
+            {loading && <Loader2 className="animate-spin" size={14} />}
+            {loading ? "Verifying..." : "Unlock Interface"}
           </button>
+          {error && <p className="text-red-500 text-[10px] mt-4 font-bold uppercase">{error}</p>}
         </form>
       </div>
     );
