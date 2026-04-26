@@ -1,37 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { 
   Heart, RefreshCw, AlertCircle, Loader2, 
   PlusCircle, Trash2, Settings2, 
-  ChevronLeft, Instagram 
+  ChevronLeft, Instagram, Lock, Unlock 
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// REPLACE THESE WITH YOUR ACTUAL KEYS FROM FIREBASE CONSOLE
-// You can find these in Project Settings > Your Apps > Web App
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDRxa14szfTtJTQsAFqNSNy-utyWSYVR1E",
+  authDomain: "relationship-meme-finder.firebaseapp.com",
+  projectId: "relationship-meme-finder",
+  storageBucket: "relationship-meme-finder.firebasestorage.app",
+  messagingSenderId: "473667344223",
+  appId: "1:473667344223:web:02d51a75e8139f396ac8ea",
+  measurementId: "G-5RJYWZDB0Z"
 };
 
-// Initialize Firebase services safely
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = "relationship-meme-finder";
 
-// Apify constants
-const APIFY_TOKEN = "apify_api_qcw3FBbnFAXebdhuXBs4I6rp6sPn8N19fLH4";
+// CHANGE THIS TO YOUR DESIRED PASSWORD
+const ACCESS_PASSWORD = "your-secure-password-here"; 
 const COST_PER_1000 = 1.70;
 
 const App = () => {
   const [user, setUser] = useState(null);
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [apifyToken, setApifyToken] = useState(null);
+  
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
@@ -40,7 +42,6 @@ const App = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [newAccount, setNewAccount] = useState("");
 
-  // Cloud-synced state
   const [sessionSpend, setSessionSpend] = useState(0);
   const [resultsPerAccount, setResultsPerAccount] = useState(5);
   const [timeValue, setTimeValue] = useState(1);
@@ -48,30 +49,34 @@ const App = () => {
   const [activeUsernames, setActiveUsernames] = useState([]);
   const [accountLibrary, setAccountLibrary] = useState([]);
 
-  // 1. Authentication Layer
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        // We use anonymous auth so users don't have to log in manually, 
-        // but their data is still private to their device/session.
-        await signInAnonymously(auth);
-      } catch (err) {
-        console.error("Auth Error:", err);
-        setError("Firebase Configuration Missing. Please add your API keys to the code.");
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
+    signInAnonymously(auth).catch(console.error);
+    return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // 2. Real-time Firestore Sync
+  // Fetch Secret Apify Token from DB once unlocked
+  const unlockApp = async (e) => {
+    e.preventDefault();
+    if (passwordInput === ACCESS_PASSWORD) {
+      try {
+        const secretSnap = await getDoc(doc(db, 'secrets', 'apify'));
+        if (secretSnap.exists()) {
+          setApifyToken(secretSnap.data().token);
+          setIsUnlocked(true);
+        } else {
+          setError("Secret token not found in database.");
+        }
+      } catch (err) {
+        setError("Database permission denied.");
+      }
+    } else {
+      alert("Incorrect Password");
+    }
+  };
+
   useEffect(() => {
     if (!user) return;
-
-    // This path is structured to work with standard Firebase Security Rules
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
-
     const unsub = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const d = docSnap.data();
@@ -82,69 +87,29 @@ const App = () => {
         setActiveUsernames(d.activeUsernames || []);
         setAccountLibrary(d.accountLibrary || []);
       } else {
-        // Initial setup for new users
         setDoc(docRef, {
-          sessionSpend: 0,
-          resultsPerAccount: 5,
-          timeValue: 1,
-          timeUnit: 'months',
+          sessionSpend: 0, resultsPerAccount: 5, timeValue: 1, timeUnit: 'months',
           activeUsernames: ["Girlyzar"],
-          accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays", "Couplesofsociety"]
+          accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays"]
         });
       }
-    }, (err) => {
-      console.error("Firestore Error:", err);
-      // If you see this error, you need to enable Firestore in your console
-      setError("Database access denied. Enable Firestore in your Firebase Console.");
     });
-
     return () => unsub();
   }, [user]);
 
   const updateCloud = async (newData) => {
     if (!user) return;
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
-      await updateDoc(docRef, newData);
-    } catch (e) {
-      console.error("Update failed:", e);
-    }
-  };
-
-  const addAccountToLibrary = (e) => {
-    e.preventDefault();
-    const clean = newAccount.replace('@', '').trim();
-    if (clean && !accountLibrary.includes(clean)) {
-      updateCloud({ 
-        accountLibrary: [...accountLibrary, clean],
-        activeUsernames: [...activeUsernames, clean]
-      });
-      setNewAccount("");
-    }
-  };
-
-  const toggleAccountActive = (name) => {
-    const newActive = activeUsernames.includes(name) 
-      ? activeUsernames.filter(u => u !== name) 
-      : [...activeUsernames, name];
-    updateCloud({ activeUsernames: newActive });
-  };
-
-  const removeFromLibrary = (name) => {
-    updateCloud({ 
-      accountLibrary: accountLibrary.filter(u => u !== name),
-      activeUsernames: activeUsernames.filter(u => u !== name)
-    });
+    await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config'), newData);
   };
 
   const fetchMemes = async () => {
-    if (activeUsernames.length === 0) return;
+    if (!apifyToken || activeUsernames.length === 0) return;
     setLoading(true);
     setError(null);
     setStatus("Scanning Instagram...");
 
     try {
-      const response = await fetch(`https://api.apify.com/v2/acts/apify~instagram-post-scraper/runs?token=${APIFY_TOKEN}`, {
+      const response = await fetch(`https://api.apify.com/v2/acts/apify~instagram-post-scraper/runs?token=${apifyToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -157,32 +122,30 @@ const App = () => {
       const run = await response.json();
       pollStatus(run.data.id, run.data.defaultDatasetId);
     } catch (err) {
-      setError("Scraper start failed.");
+      setError("Scraper failed to start.");
       setLoading(false);
     }
   };
 
   const pollStatus = (runId, datasetId) => {
     const timer = setInterval(async () => {
-      const res = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`);
+      const res = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${apifyToken}`);
       const result = await res.json();
       if (result.data.status === 'SUCCEEDED') {
         clearInterval(timer);
         fetchDataset(datasetId);
-      } else if (['FAILED', 'ABORTED', 'TIMED-OUT'].includes(result.data.status)) {
+      } else if (['FAILED', 'ABORTED'].includes(result.data.status)) {
         clearInterval(timer);
         setLoading(false);
-        setError("Scraper run failed in the cloud.");
+        setError("Cloud scan failed.");
       }
     }, 3000);
   };
 
   const fetchDataset = async (id) => {
-    setStatus("Sorting Viral Posts...");
     try {
-      const res = await fetch(`https://api.apify.com/v2/datasets/${id}/items?token=${APIFY_TOKEN}`);
+      const res = await fetch(`https://api.apify.com/v2/datasets/${id}/items?token=${apifyToken}`);
       const items = await res.json();
-      
       const now = new Date();
       let cutoff = new Date();
       if (timeUnit === 'days') cutoff.setDate(now.getDate() - timeValue);
@@ -193,232 +156,136 @@ const App = () => {
         .filter(i => new Date(i.timestamp) >= cutoff)
         .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
 
-      const runCost = (items.length / 1000) * COST_PER_1000;
-      updateCloud({ sessionSpend: sessionSpend + runCost });
-
+      updateCloud({ sessionSpend: sessionSpend + ((items.length / 1000) * COST_PER_1000) });
       setData(sorted);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e) {
-      setError("Failed to fetch results from dataset.");
+      setError("Failed to fetch results.");
     } finally {
       setLoading(false);
       setStatus("");
     }
   };
 
+  if (!isUnlocked) {
+    return (
+      <div className="h-screen bg-slate-950 flex items-center justify-center p-6">
+        <form onSubmit={unlockApp} className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] w-full max-w-sm text-center shadow-2xl">
+          <div className="bg-emerald-500/10 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <Lock className="text-emerald-500" size={28} />
+          </div>
+          <h2 className="text-white font-black text-xl uppercase tracking-tighter mb-2 italic">Access Restricted</h2>
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-8">Verification Required</p>
+          <input 
+            type="password" 
+            value={passwordInput}
+            onChange={(e) => setPasswordInput(e.target.value)}
+            placeholder="Enter Password"
+            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center text-white outline-none focus:border-emerald-500 mb-4 font-black"
+          />
+          <button type="submit" className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl hover:bg-emerald-400 transition-all uppercase tracking-widest text-xs">
+            Unlock Interface
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
-      
-      {/* Sidebar Navigation */}
-      <aside className={`${isSidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-30`}>
-        <div className="flex flex-col h-full w-80 overflow-y-auto overflow-x-hidden custom-scrollbar">
-          <div className="p-6 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden animate-in fade-in duration-700">
+      <aside className={`${isSidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-30 overflow-hidden`}>
+        <div className="flex flex-col h-full w-80">
+          <div className="p-6 border-b border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Settings2 className="text-emerald-500" size={20} />
               <h2 className="font-black text-xs uppercase tracking-widest">Targeting</h2>
             </div>
-            <button onClick={() => setIsSidebarOpen(false)} className="text-slate-500 hover:text-white transition-colors">
-              <ChevronLeft size={20} />
-            </button>
+            <button onClick={() => setIsSidebarOpen(false)} className="text-slate-500 hover:text-white"><ChevronLeft size={20} /></button>
           </div>
 
-          <div className="p-6 space-y-8 flex-1">
-            {/* Library Section */}
+          <div className="p-6 space-y-8 flex-1 overflow-y-auto custom-scrollbar">
             <section>
-              <div className="flex justify-between items-center mb-4">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">User Library</label>
-                <span className="text-[10px] font-bold text-emerald-500 tracking-wider bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                  {activeUsernames.length} ACTIVE
-                </span>
-              </div>
-              
-              <form onSubmit={addAccountToLibrary} className="flex gap-2 mb-4">
-                <input 
-                  type="text" 
-                  value={newAccount}
-                  onChange={(e) => setNewAccount(e.target.value)}
-                  placeholder="Add @username..."
-                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs flex-1 focus:border-emerald-500 outline-none"
-                />
-                <button type="submit" className="text-emerald-500 hover:scale-110 transition-transform">
-                  <PlusCircle size={22} />
-                </button>
+              <label className="text-[10px] font-black text-slate-500 uppercase mb-4 block">User Library</label>
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const clean = newAccount.replace('@', '').trim();
+                if (clean) {
+                  updateCloud({ accountLibrary: [...accountLibrary, clean], activeUsernames: [...activeUsernames, clean] });
+                  setNewAccount("");
+                }
+              }} className="flex gap-2 mb-4">
+                <input type="text" value={newAccount} onChange={(e) => setNewAccount(e.target.value)} placeholder="Add @user..." className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs flex-1 outline-none" />
+                <button type="submit" className="text-emerald-500"><PlusCircle size={22} /></button>
               </form>
-
-              <div className="space-y-1 max-h-64 overflow-y-auto border border-slate-800/50 rounded-2xl p-1 bg-slate-950/30">
-                {accountLibrary.map(u => {
-                  const isActive = activeUsernames.includes(u);
-                  return (
-                    <div key={u} className={`flex items-center justify-between p-2 rounded-xl transition-all ${isActive ? 'bg-slate-800/40' : 'opacity-30 grayscale'}`}>
-                      <button 
-                        onClick={() => toggleAccountActive(u)}
-                        className="flex items-center gap-3 flex-1 text-left"
-                      >
-                        <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-700'}`}></div>
-                        <span className="text-[11px] font-bold tracking-tight">@{u}</span>
-                      </button>
-                      <button 
-                        onClick={() => removeFromLibrary(u)}
-                        className="p-1 text-slate-600 hover:text-red-500"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  );
-                })}
+              <div className="space-y-1 bg-slate-950/30 rounded-2xl p-1 border border-slate-800/50">
+                {accountLibrary.map(u => (
+                  <div key={u} className={`flex items-center justify-between p-2 rounded-xl ${activeUsernames.includes(u) ? 'bg-slate-800/40' : 'opacity-30'}`}>
+                    <button onClick={() => updateCloud({ activeUsernames: activeUsernames.includes(u) ? activeUsernames.filter(x => x !== u) : [...activeUsernames, u] })} className="text-[11px] font-bold">@{u}</button>
+                    <button onClick={() => updateCloud({ accountLibrary: accountLibrary.filter(x => x !== u), activeUsernames: activeUsernames.filter(x => x !== u) })} className="text-slate-600 hover:text-red-500"><Trash2 size={12} /></button>
+                  </div>
+                ))}
               </div>
             </section>
-
-            {/* Config Section */}
-            <div className="space-y-6 pt-6 border-t border-slate-800">
-               <section>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block text-slate-400">Posts per Account</label>
-                <input 
-                  type="number" 
-                  value={resultsPerAccount}
-                  onChange={(e) => updateCloud({ resultsPerAccount: parseInt(e.target.value) })}
-                  className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full font-black text-xl outline-none focus:border-emerald-500"
-                />
-              </section>
-
-              <section>
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block text-slate-400">Search Window</label>
-                <div className="flex bg-slate-950 border border-slate-800 rounded-xl overflow-hidden focus-within:border-emerald-500">
-                  <input 
-                    type="number" 
-                    value={timeValue}
-                    onChange={(e) => updateCloud({ timeValue: parseInt(e.target.value) })}
-                    className="bg-transparent p-3 w-16 font-black text-xl border-r border-slate-800 outline-none"
-                  />
-                  <select 
-                    value={timeUnit}
-                    onChange={(e) => updateCloud({ timeUnit: e.target.value })}
-                    className="bg-transparent p-3 flex-1 font-bold text-xs uppercase text-slate-400 outline-none"
-                  >
-                    <option value="days">Days</option>
-                    <option value="weeks">Weeks</option>
-                    <option value="months">Months</option>
-                  </select>
-                </div>
-              </section>
-              
-              <div className="flex justify-between items-end pt-2">
-                 <span className="text-[10px] font-black text-slate-500 uppercase">Cloud Lifetime Cost</span>
-                 <span className="text-sm font-black text-white">${sessionSpend.toFixed(3)}</span>
+            
+            <section className="space-y-6 pt-6 border-t border-slate-800">
+              <div>
+                <label className="text-[10px] font-black text-slate-500 uppercase mb-2 block">Posts per Account</label>
+                <input type="number" value={resultsPerAccount} onChange={(e) => updateCloud({ resultsPerAccount: parseInt(e.target.value) })} className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full font-black text-xl outline-none" />
               </div>
-            </div>
+              <div className="flex justify-between items-end">
+                 <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Lifetime Cost</span>
+                 <span className="text-sm font-black text-white italic">${sessionSpend.toFixed(3)}</span>
+              </div>
+            </section>
           </div>
 
-          <div className="p-6 border-t border-slate-800 sticky bottom-0 bg-slate-900 z-10">
-            <button
-              onClick={fetchMemes}
-              disabled={loading || activeUsernames.length === 0}
-              className="w-full flex items-center justify-center gap-3 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 py-5 rounded-2xl font-black transition-all shadow-xl active:scale-95"
-            >
+          <div className="p-6 border-t border-slate-800">
+            <button onClick={fetchMemes} disabled={loading} className="w-full bg-emerald-500 text-slate-950 py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3">
               {loading ? <Loader2 className="animate-spin" size={20} /> : <RefreshCw size={20} />}
-              {loading ? "FETCHING..." : "START SCAN"}
+              {loading ? "SCANNING..." : "START SCAN"}
             </button>
           </div>
         </div>
       </aside>
 
-      {/* Main Grid View */}
-      <main className="flex-1 flex flex-col h-screen relative">
-        <nav className="h-20 border-b border-slate-900 px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-xl z-20">
+      <main className="flex-1 flex flex-col h-screen">
+        <nav className="h-20 border-b border-slate-900 px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-xl">
           <div className="flex items-center gap-4">
-            {!isSidebarOpen && (
-              <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl text-slate-400">
-                <Settings2 size={20} />
-              </button>
-            )}
-            <div className="flex items-center gap-3">
-              <div className="bg-emerald-500 p-2 rounded-xl shadow-lg">
-                <Heart className="text-white fill-white" size={18} />
-              </div>
-              <h1 className="text-xl font-black tracking-tighter text-white uppercase italic">
-                Relationship Meme Finder
-              </h1>
-            </div>
+            {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl"><Settings2 size={20} /></button>}
+            <div className="bg-emerald-500 p-2 rounded-xl"><Heart className="text-white fill-white" size={18} /></div>
+            <h1 className="text-xl font-black text-white uppercase italic tracking-tighter">Relationship Meme Finder</h1>
           </div>
-          <div className="hidden sm:block text-[9px] font-black text-slate-500 uppercase tracking-widest">
-            Last Scan: {lastUpdated || "N/A"}
-          </div>
+          <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Linked & Secured <Unlock size={10} className="inline ml-1 mb-0.5" /></div>
         </nav>
 
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          {error && (
-            <div className="mb-8 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3">
-              <AlertCircle size={18} />
-              <span className="text-xs font-black uppercase tracking-widest">{error}</span>
-            </div>
-          )}
+          {error && <div className="mb-8 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-xs font-black uppercase tracking-widest"><AlertCircle size={18} />{error}</div>}
+          {status && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-8 animate-pulse text-[10px] font-black uppercase tracking-widest"><Loader2 className="animate-spin" size={16} />{status}</div>}
 
-          {status && (
-            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-8 animate-pulse max-w-sm">
-              <Loader2 className="animate-spin" size={16} />
-              <span className="text-[10px] font-black uppercase tracking-widest">{status}</span>
-            </div>
-          )}
-
-          {data.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-8 pb-20">
-              {data.map((meme, idx) => (
-                <div key={meme.id || idx} className="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden flex flex-col hover:border-emerald-500/50 transition-all shadow-2xl">
-                  <div className="p-4 flex justify-between items-center border-b border-slate-800/50">
-                    <span className="font-black text-[10px] text-emerald-500 uppercase flex items-center gap-2">
-                      <Instagram size={10} /> @{meme.ownerUsername}
-                    </span>
-                    <span className="text-[9px] font-black text-slate-500 bg-slate-950 px-2 py-0.5 rounded">
-                      {new Date(meme.timestamp).toLocaleDateString()}
-                    </span>
-                  </div>
-
-                  <div className="aspect-square bg-black">
-                    <img 
-                      src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=600&h=600&fit=cover`} 
-                      alt="Viral Content"
-                      className="w-full h-full object-cover"
-                      loading="lazy"
-                    />
-                  </div>
-
-                  <div className="p-5 bg-gradient-to-b from-slate-900 to-black">
-                    <div className="flex gap-2 mb-4">
-                      <div className="flex-1 bg-slate-950 p-2 rounded-xl text-center border border-slate-800">
-                        <div className="text-[8px] font-bold text-slate-500 uppercase mb-0.5">Likes</div>
-                        <div className="text-lg font-black text-white">{(meme.likesCount || 0).toLocaleString()}</div>
-                      </div>
-                      <div className="flex-1 bg-slate-950 p-2 rounded-xl text-center border border-slate-800">
-                        <div className="text-[8px] font-bold text-slate-500 uppercase mb-0.5">Rank</div>
-                        <div className="text-lg font-black text-emerald-500">#{idx + 1}</div>
-                      </div>
-                    </div>
-                    <a 
-                      href={meme.url} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="block text-center bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-colors shadow-lg shadow-emerald-900/20"
-                    >
-                      View Original Post
-                    </a>
-                  </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-8 pb-20">
+            {data.map((meme, idx) => (
+              <div key={idx} className="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden flex flex-col">
+                <div className="p-4 flex justify-between items-center border-b border-slate-800/50">
+                  <span className="font-black text-[10px] text-emerald-500 uppercase tracking-tight">@{meme.ownerUsername}</span>
+                  <span className="text-[9px] font-black text-slate-500 italic">#{idx+1}</span>
                 </div>
-              ))}
-            </div>
-          ) : !loading && (
-            <div className="flex flex-col items-center justify-center py-40 opacity-20">
-               <Heart size={80} className="text-emerald-500 mb-6" />
-               <p className="font-black text-xs uppercase tracking-[0.4em]">No scans performed yet</p>
-            </div>
-          )}
+                <div className="aspect-square bg-black">
+                  <img src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=600&h=600&fit=cover`} alt="Meme" className="w-full h-full object-cover" />
+                </div>
+                <div className="p-5">
+                  <div className="flex-1 bg-slate-950 p-2 rounded-xl text-center border border-slate-800 mb-4">
+                    <div className="text-[8px] font-bold text-slate-500 uppercase mb-0.5">Likes</div>
+                    <div className="text-lg font-black text-white">{(meme.likesCount || 0).toLocaleString()}</div>
+                  </div>
+                  <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-emerald-600 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-widest">View Post</a>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </main>
 
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #10b981; border-radius: 10px; }
-      `}</style>
+      <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #10b981; border-radius: 10px; }`}</style>
     </div>
   );
 };
