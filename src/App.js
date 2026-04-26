@@ -5,7 +5,7 @@ import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc } from "fireba
 import { 
   Heart, RefreshCw, AlertCircle, Loader2, 
   PlusCircle, Trash2, Settings2, 
-  ChevronLeft, Instagram, Lock, Unlock 
+  ChevronLeft, Instagram, Lock, Unlock, Calendar
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -37,7 +37,7 @@ const App = () => {
   const [status, setStatus] = useState("");
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [newAccount, setNewAccount] = useState("");
 
   const [sessionSpend, setSessionSpend] = useState(0);
@@ -48,27 +48,19 @@ const App = () => {
   const [accountLibrary, setAccountLibrary] = useState([]);
 
   useEffect(() => {
-    // Initial anonymous sign in to allow database access based on rules
     signInAnonymously(auth).catch(console.error);
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // Secure Unlock: Compare input with the password stored in Firestore
   const unlockApp = async (e) => {
     e.preventDefault();
-    if (!user) {
-      alert("Authentication not initialized. Please refresh.");
-      return;
-    }
-
+    if (!user) return;
     try {
       setLoading(true);
       const secretSnap = await getDoc(doc(db, 'secrets', 'apify'));
-      
       if (secretSnap.exists()) {
         const remotePassword = secretSnap.data().password;
         const token = secretSnap.data().token;
-
         if (passwordInput === remotePassword) {
           setApifyToken(token);
           setIsUnlocked(true);
@@ -77,10 +69,10 @@ const App = () => {
           alert("Incorrect Password");
         }
       } else {
-        setError("Security configuration missing in database.");
+        setError("Security configuration missing.");
       }
     } catch (err) {
-      setError("Access denied. Check Firestore rules.");
+      setError("Access denied.");
     } finally {
       setLoading(false);
     }
@@ -168,7 +160,8 @@ const App = () => {
         .filter(i => new Date(i.timestamp) >= cutoff)
         .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
 
-      updateCloud({ sessionSpend: sessionSpend + ((items.length / 1000) * COST_PER_1000) });
+      const actualCost = (items.length / 1000) * COST_PER_1000;
+      updateCloud({ sessionSpend: sessionSpend + actualCost });
       setData(sorted);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e) {
@@ -179,123 +172,212 @@ const App = () => {
     }
   };
 
+  const estCost = ((activeUsernames.length * resultsPerAccount) / 1000) * COST_PER_1000;
+
   if (!isUnlocked) {
     return (
-      <div className="h-screen bg-slate-950 flex items-center justify-center p-6">
+      <div className="h-screen bg-slate-950 flex items-center justify-center p-6 touch-none">
         <form onSubmit={unlockApp} className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] w-full max-w-sm text-center shadow-2xl">
           <div className="bg-emerald-500/10 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6">
             <Lock className="text-emerald-500" size={28} />
           </div>
           <h2 className="text-white font-black text-xl uppercase tracking-tighter mb-2 italic">Access Restricted</h2>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-8">Verification Required</p>
+          <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-8">Verification Required</p>
           <input 
             type="password" 
             value={passwordInput}
             onChange={(e) => setPasswordInput(e.target.value)}
             placeholder="Enter Password"
-            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center text-white outline-none focus:border-emerald-500 mb-4 font-black"
+            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center text-white outline-none focus:border-emerald-500 mb-4 font-black text-base"
+            style={{ fontSize: '16px' }} 
           />
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl hover:bg-emerald-400 disabled:opacity-50 transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2"
-          >
+          <button type="submit" disabled={loading} className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl hover:bg-emerald-400 active:scale-95 transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2">
             {loading && <Loader2 className="animate-spin" size={14} />}
-            {loading ? "Verifying..." : "Unlock Interface"}
+            {loading ? "Verifying..." : "Unlock"}
           </button>
-          {error && <p className="text-red-500 text-[10px] mt-4 font-bold uppercase">{error}</p>}
         </form>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden animate-in fade-in duration-700">
-      <aside className={`${isSidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-30 overflow-hidden`}>
-        <div className="flex flex-col h-full w-80">
-          <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden" 
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      <aside className={`fixed lg:relative h-full z-50 transition-all duration-300 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 overflow-hidden ${isSidebarOpen ? 'translate-x-0 w-[85vw] lg:w-80' : '-translate-x-full lg:translate-x-0 lg:w-0'}`}>
+        <div className="flex flex-col h-full w-full">
+          <div className="p-6 border-b border-slate-800 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
               <Settings2 className="text-emerald-500" size={20} />
-              <h2 className="font-black text-xs uppercase tracking-widest">Targeting</h2>
+              <h2 className="font-black text-xs uppercase tracking-widest">Settings</h2>
             </div>
-            <button onClick={() => setIsSidebarOpen(false)} className="text-slate-500 hover:text-white"><ChevronLeft size={20} /></button>
+            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden text-slate-500 p-2"><ChevronLeft size={24} /></button>
           </div>
 
           <div className="p-6 space-y-8 flex-1 overflow-y-auto custom-scrollbar">
             <section>
-              <label className="text-[10px] font-black text-slate-500 uppercase mb-4 block">User Library</label>
+              <label className="text-[10px] font-black text-slate-500 uppercase mb-4 block tracking-widest">User Library</label>
               <form onSubmit={(e) => {
                 e.preventDefault();
                 const clean = newAccount.replace('@', '').trim();
                 if (clean) {
-                  updateCloud({ accountLibrary: [...accountLibrary, clean], activeUsernames: [...activeUsernames, clean] });
+                  updateCloud({ 
+                    accountLibrary: Array.from(new Set([...accountLibrary, clean])), 
+                    activeUsernames: [...activeUsernames, clean] 
+                  });
                   setNewAccount("");
                 }
               }} className="flex gap-2 mb-4">
-                <input type="text" value={newAccount} onChange={(e) => setNewAccount(e.target.value)} placeholder="Add @user..." className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs flex-1 outline-none" />
-                <button type="submit" className="text-emerald-500"><PlusCircle size={22} /></button>
+                <input 
+                  type="text" 
+                  value={newAccount} 
+                  onChange={(e) => setNewAccount(e.target.value)} 
+                  placeholder="Add @user..." 
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm flex-1 outline-none focus:border-emerald-500" 
+                  style={{ fontSize: '16px' }}
+                />
+                <button type="submit" className="text-emerald-500 p-1 active:scale-90 transition-transform"><PlusCircle size={24} /></button>
               </form>
-              <div className="space-y-1 bg-slate-950/30 rounded-2xl p-1 border border-slate-800/50">
-                {accountLibrary.map(u => (
-                  <div key={u} className={`flex items-center justify-between p-2 rounded-xl ${activeUsernames.includes(u) ? 'bg-slate-800/40' : 'opacity-30'}`}>
-                    <button onClick={() => updateCloud({ activeUsernames: activeUsernames.includes(u) ? activeUsernames.filter(x => x !== u) : [...activeUsernames, u] })} className="text-[11px] font-bold">@{u}</button>
-                    <button onClick={() => updateCloud({ accountLibrary: accountLibrary.filter(x => x !== u), activeUsernames: activeUsernames.filter(x => x !== u) })} className="text-slate-600 hover:text-red-500"><Trash2 size={12} /></button>
-                  </div>
-                ))}
+              <div className="space-y-1.5 bg-slate-950/30 rounded-2xl p-2 border border-slate-800/50">
+                {accountLibrary.map(u => {
+                  const isActive = activeUsernames.includes(u);
+                  return (
+                    <div key={u} className={`flex items-center justify-between p-2.5 rounded-xl transition-all ${isActive ? 'bg-slate-800/60' : 'opacity-40 grayscale'}`}>
+                      <button 
+                        onClick={() => updateCloud({ activeUsernames: isActive ? activeUsernames.filter(x => x !== u) : [...activeUsernames, u] })} 
+                        className="flex items-center gap-3 flex-1 text-left"
+                      >
+                        <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-600'}`} />
+                        <span className="text-[11px] font-bold tracking-tight">@{u}</span>
+                      </button>
+                      <button onClick={() => updateCloud({ accountLibrary: accountLibrary.filter(x => x !== u), activeUsernames: activeUsernames.filter(x => x !== u) })} className="text-slate-600 hover:text-red-500 p-1"><Trash2 size={14} /></button>
+                    </div>
+                  );
+                })}
               </div>
             </section>
             
             <section className="space-y-6 pt-6 border-t border-slate-800">
               <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase mb-2 block">Posts per Account</label>
-                <input type="number" value={resultsPerAccount} onChange={(e) => updateCloud({ resultsPerAccount: parseInt(e.target.value) })} className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full font-black text-xl outline-none" />
+                <label className="text-[10px] font-black text-slate-500 uppercase mb-3 block tracking-widest">Lookback Window</label>
+                <div className="flex gap-2 mb-3">
+                  <input 
+                    type="number" 
+                    value={timeValue} 
+                    onChange={(e) => updateCloud({ timeValue: parseInt(e.target.value) || 1 })} 
+                    className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-1/3 font-black text-lg outline-none text-center" 
+                    style={{ fontSize: '16px' }}
+                  />
+                  <select 
+                    value={timeUnit} 
+                    onChange={(e) => updateCloud({ timeUnit: e.target.value })}
+                    className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex-1 font-black text-xs uppercase tracking-widest outline-none"
+                    style={{ fontSize: '16px' }}
+                  >
+                    <option value="days">Days</option>
+                    <option value="weeks">Weeks</option>
+                    <option value="months">Months</option>
+                  </select>
+                </div>
               </div>
-              <div className="flex justify-between items-end">
-                 <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Lifetime Cost</span>
-                 <span className="text-sm font-black text-white italic">${sessionSpend.toFixed(3)}</span>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-500 uppercase mb-3 block tracking-widest">Posts per Account</label>
+                <input 
+                  type="text" 
+                  inputMode="numeric"
+                  value={resultsPerAccount} 
+                  onChange={(e) => updateCloud({ resultsPerAccount: e.target.value === '' ? '' : parseInt(e.target.value) })} 
+                  className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full font-black text-xl outline-none focus:border-emerald-500" 
+                  style={{ fontSize: '16px' }}
+                />
+              </div>
+
+              <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50 space-y-2">
+                <div className="flex justify-between items-center text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                   <span>Est. Scan Cost</span>
+                   <span className="text-emerald-500 italic">${estCost.toFixed(3)}</span>
+                </div>
+                <div className="flex justify-between items-center text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                   <span>Lifetime Cost</span>
+                   <span className="text-white italic">${sessionSpend.toFixed(3)}</span>
+                </div>
               </div>
             </section>
           </div>
 
-          <div className="p-6 border-t border-slate-800">
-            <button onClick={fetchMemes} disabled={loading} className="w-full bg-emerald-500 text-slate-950 py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3">
+          <div className="p-6 border-t border-slate-800 shrink-0">
+            <button 
+              onClick={fetchMemes} 
+              disabled={loading || activeUsernames.length === 0} 
+              className="w-full bg-emerald-500 text-slate-950 py-4 lg:py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+            >
               {loading ? <Loader2 className="animate-spin" size={20} /> : <RefreshCw size={20} />}
-              {loading ? "SCANNING..." : "START SCAN"}
+              <span className="tracking-widest text-xs uppercase">{loading ? "SCANNING..." : "START SCAN"}</span>
             </button>
           </div>
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col h-screen">
-        <nav className="h-20 border-b border-slate-900 px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-xl">
-          <div className="flex items-center gap-4">
-            {!isSidebarOpen && <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl"><Settings2 size={20} /></button>}
-            <div className="bg-emerald-500 p-2 rounded-xl"><Heart className="text-white fill-white" size={18} /></div>
-            <h1 className="text-xl font-black text-white uppercase italic tracking-tighter">Relationship Meme Finder</h1>
+      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+        <nav className="h-20 border-b border-slate-900 px-4 lg:px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-xl shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden"><Settings2 size={20} /></button>
+            <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
+            <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter truncate">Relationship Finder</h1>
           </div>
-          <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Linked & Secured <Unlock size={10} className="inline ml-1 mb-0.5" /></div>
+          <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2">
+            SECURE LINK <Unlock size={10} className="text-emerald-500" />
+          </div>
         </nav>
 
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          {error && <div className="mb-8 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-xs font-black uppercase tracking-widest"><AlertCircle size={18} />{error}</div>}
-          {status && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-8 animate-pulse text-[10px] font-black uppercase tracking-widest"><Loader2 className="animate-spin" size={16} />{status}</div>}
+        <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
+          {error && <div className="mb-6 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest"><AlertCircle size={16} />{error}</div>}
+          {status && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-6 animate-pulse text-[10px] font-black uppercase tracking-widest"><Loader2 className="animate-spin" size={16} />{status}</div>}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-8 pb-20">
+          {data.length === 0 && !loading && !status && (
+            <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
+              <Instagram size={64} className="mb-4" />
+              <p className="font-black text-xs uppercase tracking-[0.2em]">Ready to analyze target feeds</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6 lg:gap-8 pb-20">
             {data.map((meme, idx) => (
-              <div key={idx} className="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden flex flex-col">
+              <div key={idx} className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden flex flex-col group hover:border-emerald-500/50 transition-all shadow-xl">
                 <div className="p-4 flex justify-between items-center border-b border-slate-800/50">
-                  <span className="font-black text-[10px] text-emerald-500 uppercase tracking-tight">@{meme.ownerUsername}</span>
-                  <span className="text-[9px] font-black text-slate-500 italic">#{idx+1}</span>
-                </div>
-                <div className="aspect-square bg-black">
-                  <img src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=600&h=600&fit=cover`} alt="Meme" className="w-full h-full object-cover" />
-                </div>
-                <div className="p-5">
-                  <div className="flex-1 bg-slate-950 p-2 rounded-xl text-center border border-slate-800 mb-4">
-                    <div className="text-[8px] font-bold text-slate-500 uppercase mb-0.5">Likes</div>
-                    <div className="text-lg font-black text-white">{(meme.likesCount || 0).toLocaleString()}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                    <span className="font-black text-[10px] text-white uppercase tracking-tight">@{meme.ownerUsername}</span>
                   </div>
-                  <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-emerald-600 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-widest">View Post</a>
+                  <span className="text-[9px] font-black text-slate-600 italic">RANK #{idx+1}</span>
+                </div>
+                <div className="aspect-square bg-black overflow-hidden">
+                  <img 
+                    src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=600&h=600&fit=cover`} 
+                    alt="Meme" 
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
+                    loading="lazy"
+                  />
+                </div>
+                <div className="p-5 space-y-4">
+                  <div className="flex gap-2">
+                    <div className="flex-1 bg-slate-950 p-2.5 rounded-2xl text-center border border-slate-800">
+                      <div className="text-[8px] font-bold text-slate-600 uppercase mb-0.5 tracking-widest">Likes</div>
+                      <div className="text-base font-black text-white italic">{(meme.likesCount || 0).toLocaleString()}</div>
+                    </div>
+                    <div className="flex-1 bg-slate-950 p-2.5 rounded-2xl text-center border border-slate-800">
+                      <div className="text-[8px] font-bold text-slate-600 uppercase mb-0.5 tracking-widest">Comments</div>
+                      <div className="text-base font-black text-white italic">{(meme.commentsCount || 0).toLocaleString()}</div>
+                    </div>
+                  </div>
+                  <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-white text-slate-950 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all">Open Instagram</a>
                 </div>
               </div>
             ))}
@@ -303,7 +385,15 @@ const App = () => {
         </div>
       </main>
 
-      <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #10b981; border-radius: 10px; }`}</style>
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; } 
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #10b981; border-radius: 10px; }
+        input[type="number"]::-webkit-inner-spin-button, 
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        @media (max-width: 1024px) {
+          input, select, textarea { font-size: 16px !important; }
+        }
+      `}</style>
     </div>
   );
 };
