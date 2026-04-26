@@ -372,7 +372,7 @@ const App = () => {
           <div className="flex items-center gap-3">
             <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden"><Settings2 size={20} /></button>
             <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
-            <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter truncate">Relationship Finder</h1>
+            <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter truncate">Relationship Meme Finder</h1>
           </div>
           <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2">
             SECURE LINK <Unlock size={10} className="text-emerald-500" />
