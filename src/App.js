@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, getDocs, deleteDoc, where } from "firebase/firestore";
+import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, getDocs, deleteDoc, where, startAfter } from "firebase/firestore";
 import { 
   Heart, RefreshCw, AlertCircle, Loader2, 
   PlusCircle, Trash2, Settings2, 
