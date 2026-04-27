@@ -5,7 +5,8 @@ import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc } from "fireba
 import { 
   Heart, RefreshCw, AlertCircle, Loader2, 
   PlusCircle, Trash2, Settings2, 
-  ChevronLeft, Instagram, Lock, Unlock, Calendar
+  ChevronLeft, Instagram, Lock, Unlock, Calendar,
+  ThumbsUp, ThumbsDown
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -35,6 +36,7 @@ const App = () => {
   const [data, setData] = useState([]);
   const [history, setHistory] = useState([]);
   const [lastScrapedMap, setLastScrapedMap] = useState({});
+  const [historyFilter, setHistoryFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('results');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
@@ -51,9 +53,6 @@ const App = () => {
   const [timeUnit, setTimeUnit] = useState('months');
   const [activeUsernames, setActiveUsernames] = useState([]);
   const [accountLibrary, setAccountLibrary] = useState([]);
-
-  // TEMPORARY CODE: For pulling from existing Apify run
-  const existingRunId = "6S7I0Io5onwLhEIlf";
 
   useEffect(() => {
     signInAnonymously(auth).catch(console.error);
@@ -98,7 +97,7 @@ const App = () => {
 
   useEffect(() => {
     if (!user) return;
-    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config');
+    const docRef = doc(db, 'artifacts', appId, 'settings', 'config');
     const unsub = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const d = docSnap.data();
@@ -132,7 +131,8 @@ const App = () => {
 
   const updateCloud = async (newData) => {
     if (!user) return;
-    await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'config'), newData);
+    const configRef = doc(db, 'artifacts', appId, 'settings', 'config');
+    await setDoc(configRef, newData, { merge: true });
   };
 
   const setResultsPerAccountAndSave = async (value) => {
@@ -187,17 +187,68 @@ const App = () => {
     }, 3000);
   };
 
+  const isVideoItem = (item) => {
+    if (!item) return false;
+    const type = String(item.type || '').toLowerCase();
+    const postType = String(item.postType || '').toLowerCase();
+    const mediaType = String(item.mediaType || '').toLowerCase();
+    return item.isVideo === true
+      || type.includes('video')
+      || postType.includes('video')
+      || mediaType.includes('video')
+      || Boolean(item.videoUrl)
+      || Boolean(item.videoUrls)
+      || Boolean(item.hasOwnProperty('is_video') && item.is_video);
+  };
+
+  const shouldKeepPost = (item) => {
+    if (!item || isVideoItem(item)) return false;
+    const itemType = String(item.postType || item.type || item.mediaType || '').toLowerCase();
+    const isCarousel = itemType.includes('carousel');
+    const isImage = itemType.includes('image') || itemType.includes('photo') || itemType.includes('post');
+    return isCarousel || isImage || Boolean(item.displayUrl) || Boolean(item.url);
+  };
+
+  const getItemKey = (item) => item.url || item.id || item._id || `${item.ownerUsername}-${item.timestamp}`;
+
   const mergeHistory = (newItems) => {
-    const combined = [...newItems, ...history];
+    const combined = [...history, ...newItems];
     const uniqueMap = new Map();
+
     combined.forEach(item => {
-      const key = item.url || item.id || item._id || `${item.ownerUsername}-${item.timestamp}`;
+      const key = getItemKey(item);
       const existing = uniqueMap.get(key);
+      const merged = existing ? {
+        ...existing,
+        ...item,
+        vote: item.vote || existing.vote || 'none'
+      } : { ...item, vote: item.vote || 'none' };
+
       if (!existing || (item.likesCount || 0) > (existing.likesCount || 0)) {
-        uniqueMap.set(key, item);
+        uniqueMap.set(key, merged);
+      } else {
+        uniqueMap.set(key, merged);
       }
     });
+
     return Array.from(uniqueMap.values()).sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
+  };
+
+  const applyVote = async (item, vote) => {
+    const key = getItemKey(item);
+    const nextData = data.map((current) => {
+      if (getItemKey(current) !== key) return current;
+      return { ...current, vote };
+    });
+
+    const nextHistory = mergeHistory([
+      ...history.filter((h) => getItemKey(h) !== key),
+      { ...item, vote }
+    ]);
+
+    setData(nextData);
+    setHistory(nextHistory);
+    await updateCloud({ history: nextHistory });
   };
 
   const fetchDataset = async (id) => {
@@ -210,11 +261,12 @@ const App = () => {
       else if (timeUnit === 'weeks') cutoff.setDate(now.getDate() - (timeValue * 7));
       else if (timeUnit === 'months') cutoff.setMonth(now.getMonth() - timeValue);
 
-      const sorted = items
+      const filtered = items.filter(shouldKeepPost).map(item => ({ ...item, vote: item.vote || 'none' }));
+      const sorted = filtered
         .filter(i => new Date(i.timestamp) >= cutoff)
         .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
 
-      const actualCost = (items.length / 1000) * COST_PER_1000;
+      const actualCost = (filtered.length / 1000) * COST_PER_1000;
       const nextHistory = mergeHistory(sorted);
       const nextLastScrapedMap = { ...lastScrapedMap };
       activeUsernames.forEach((username) => {
@@ -238,56 +290,14 @@ const App = () => {
     }
   };
 
-  // TEMPORARY CODE: Fetch from existing Apify run
-  const fetchFromExistingRun = async () => {
-    if (!apifyToken) return;
-    setLoading(true);
-    setError(null);
-    setStatus("Fetching existing run data...");
-
-    try {
-      // Get run details to find datasetId
-      const runRes = await fetch(`https://api.apify.com/v2/actor-runs/${existingRunId}?token=${apifyToken}`);
-      const runData = await runRes.json();
-      if (runData.data && runData.data.defaultDatasetId) {
-        const datasetId = runData.data.defaultDatasetId;
-        // Now fetch the dataset
-        const res = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?token=${apifyToken}`);
-        const items = await res.json();
-        const now = new Date();
-        let cutoff = new Date();
-        if (timeUnit === 'days') cutoff.setDate(now.getDate() - timeValue);
-        else if (timeUnit === 'weeks') cutoff.setDate(now.getDate() - (timeValue * 7));
-        else if (timeUnit === 'months') cutoff.setMonth(now.getMonth() - timeValue);
-
-        const sorted = items
-          .filter(i => new Date(i.timestamp) >= cutoff)
-          .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
-
-        const nextHistory = mergeHistory(sorted);
-        const nextLastScrapedMap = { ...lastScrapedMap };
-        activeUsernames.forEach((username) => {
-          nextLastScrapedMap[username] = new Date().toISOString();
-        });
-
-        updateCloud({ history: nextHistory, lastScrapedMap: nextLastScrapedMap });
-        setData(sorted);
-        setHistory(nextHistory);
-        setLastScrapedMap(nextLastScrapedMap);
-        setLastUpdated(new Date().toLocaleTimeString());
-      } else {
-        setError("Failed to get dataset from existing run.");
-      }
-    } catch (e) {
-      setError("Failed to fetch from existing run.");
-    } finally {
-      setLoading(false);
-      setStatus("");
-    }
-  };
-
   const estCost = ((activeUsernames.length * resultsPerAccount) / 1000) * COST_PER_1000;
-  const activeViewData = activeTab === 'history' ? history : data;
+  const filteredHistory = history.filter((item) => {
+    if (historyFilter === 'liked') return item.vote === 'up';
+    if (historyFilter === 'disliked') return item.vote === 'down';
+    if (historyFilter === 'unrated') return item.vote === 'none';
+    return true;
+  });
+  const activeViewData = activeTab === 'history' ? filteredHistory : data;
 
   if (!isUnlocked) {
     return (
@@ -465,39 +475,45 @@ const App = () => {
               <span className="tracking-widest text-xs uppercase">{loading ? "SCANNING..." : "START SCAN"}</span>
             </button>
             {/* TEMPORARY CODE: Button to fetch from existing run */}
-            <button 
-              onClick={fetchFromExistingRun} 
-              disabled={loading} 
-              className="w-full bg-blue-500 text-slate-950 py-4 lg:py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
-            >
-              {loading ? <Loader2 className="animate-spin" size={20} /> : <RefreshCw size={20} />}
-              <span className="tracking-widest text-xs uppercase">{loading ? "FETCHING..." : "FETCH EXISTING RUN"}</span>
-            </button>
           </div>
         </div>
       </aside>
 
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <nav className="h-20 border-b border-slate-900 px-4 lg:px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-xl shrink-0">
-          <div className="flex flex-col gap-4 lg:gap-0 lg:flex-row lg:items-center lg:justify-between w-full">
-          <div className="flex items-center gap-3">
-            <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden"><Settings2 size={20} /></button>
-            <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
-            <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter truncate">Relationship Meme Finder</h1>
+        <nav className="border-b border-slate-900 px-4 lg:px-8 bg-slate-950/80 backdrop-blur-xl shrink-0">
+          <div className="flex flex-col gap-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden"><Settings2 size={20} /></button>
+                <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
+                <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter truncate">Relationship Meme Finder</h1>
+              </div>
+              <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2">
+                SECURE LINK <Unlock size={10} className="text-emerald-500" />
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap gap-2 rounded-2xl bg-slate-900 border border-slate-800 p-2">
+                <button onClick={() => setActiveTab('results')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'results' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>Recent</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'history' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>History</button>
+              </div>
+              <div className="text-[10px] uppercase tracking-widest text-slate-500">
+                {activeTab === 'history' ? `${filteredHistory.length} memes in ${historyFilter}` : `Last updated: ${lastUpdated || 'Not yet scanned'}`}
+              </div>
+            </div>
+            {activeTab === 'history' && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {['all', 'liked', 'disliked', 'unrated'].map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setHistoryFilter(filter)}
+                    className={`px-3 py-2 text-[9px] font-black uppercase tracking-widest rounded-2xl border transition-all ${historyFilter === filter ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-500'}`}>
+                    {filter === 'all' ? 'All' : filter === 'liked' ? 'Liked' : filter === 'disliked' ? 'Disliked' : 'Unrated'}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2">
-            SECURE LINK <Unlock size={10} className="text-emerald-500" />
-          </div>
-        </div>
-        <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-3 rounded-2xl bg-slate-900 border border-slate-800 p-2">
-            <button onClick={() => setActiveTab('results')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'results' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>Recent</button>
-            <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'history' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>History</button>
-          </div>
-          <div className="text-[10px] uppercase tracking-widest text-slate-500">
-            {activeTab === 'history' ? `${history.length} unique memes in history` : `Last updated: ${lastUpdated || 'Not yet scanned'}`}
-          </div>
-        </div>
         </nav>
         <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
           {error && <div className="mb-6 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest"><AlertCircle size={16} />{error}</div>}
@@ -518,12 +534,11 @@ const App = () => {
                     <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
                     <span className="font-black text-[10px] text-white uppercase tracking-tight">@{meme.ownerUsername}</span>
                   </div>
-                  <span className="text-[9px] font-black text-slate-600 italic">
-                    RANK #{idx+1}
+                  <span className="text-[10px] font-black text-slate-600 italic">
                     {meme.timestamp && (() => {
                       const date = new Date(meme.timestamp);
                       if (!Number.isNaN(date.getTime())) {
-                        return ` • ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+                        return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
                       }
                       return '';
                     })()}
@@ -547,6 +562,20 @@ const App = () => {
                       <div className="text-[8px] font-bold text-slate-600 uppercase mb-0.5 tracking-widest">Comments</div>
                       <div className="text-base font-black text-white italic">{(meme.commentsCount || 0).toLocaleString()}</div>
                     </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => applyVote(meme, meme.vote === 'up' ? 'none' : 'up')}
+                      className={`flex-1 inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${meme.vote === 'up' ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500 hover:text-white'}`}
+                    >
+                      <ThumbsUp size={16} /> {meme.vote === 'up' ? 'Liked' : 'Like'}
+                    </button>
+                    <button
+                      onClick={() => applyVote(meme, meme.vote === 'down' ? 'none' : 'down')}
+                      className={`flex-1 inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${meme.vote === 'down' ? 'bg-red-500 text-slate-950 border-red-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-red-500 hover:text-white'}`}
+                    >
+                      <ThumbsDown size={16} /> {meme.vote === 'down' ? 'Disliked' : 'Dislike'}
+                    </button>
                   </div>
                   <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-white text-slate-950 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all">Open Instagram</a>
                 </div>
