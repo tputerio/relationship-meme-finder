@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, getDocs, deleteDoc, where } from "firebase/firestore";
 import { 
   Heart, RefreshCw, AlertCircle, Loader2, 
   PlusCircle, Trash2, Settings2, 
@@ -44,6 +44,9 @@ const App = () => {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [newAccount, setNewAccount] = useState("");
+  const [historyLastDoc, setHistoryLastDoc] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [hasMoreHistory, setHasMoreHistory] = useState(true);
 
   const [sessionSpend, setSessionSpend] = useState(0);
   const [resultsPerAccount, setResultsPerAccount] = useState(5);
@@ -111,7 +114,6 @@ const App = () => {
         setTimeUnit(d.timeUnit || 'months');
         setActiveUsernames(d.activeUsernames || []);
         setAccountLibrary(d.accountLibrary || []);
-        setHistory(d.history || []);
         setLastScrapedMap(d.lastScrapedMap || {});
       } else {
         setDoc(docRef, {
@@ -121,7 +123,6 @@ const App = () => {
           timeUnit: 'months',
           activeUsernames: ["Girlyzar"],
           accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays"],
-          history: [],
           lastScrapedMap: {}
         });
       }
@@ -134,6 +135,51 @@ const App = () => {
     const configRef = doc(db, 'artifacts', appId, 'settings', 'config');
     await setDoc(configRef, newData, { merge: true });
   };
+
+  const loadHistory = async (loadMore = false) => {
+    if (!user || historyLoading) return;
+    setHistoryLoading(true);
+    try {
+      const historyRef = collection(db, 'artifacts', appId, 'settings', 'config', 'history');
+      let q = query(historyRef, orderBy('likesCount', 'desc'), limit(50));
+      if (loadMore && historyLastDoc) {
+        q = query(historyRef, orderBy('likesCount', 'desc'), limit(50), startAfter(historyLastDoc));
+      }
+
+      const querySnapshot = await getDocs(q);
+      const newItems = [];
+      querySnapshot.forEach((doc) => {
+        newItems.push({ id: doc.id, ...doc.data() });
+      });
+
+      // Cleanup old downvoted items
+      const now = Date.now();
+      const cutoff = now - 24 * 60 * 60 * 1000; // 24 hours ago
+      const toDelete = newItems.filter(item => item.vote === 'down' && item.downvotedAt && item.downvotedAt < cutoff);
+      for (const item of toDelete) {
+        await deleteDoc(doc(historyRef, item.id));
+      }
+      const filteredItems = newItems.filter(item => !(item.vote === 'down' && item.downvotedAt && item.downvotedAt < cutoff));
+
+      if (loadMore) {
+        setHistory(prev => [...prev, ...filteredItems]);
+      } else {
+        setHistory(filteredItems);
+      }
+      setHistoryLastDoc(querySnapshot.docs[querySnapshot.docs.length - 1]);
+      setHasMoreHistory(querySnapshot.docs.length === 50);
+    } catch (err) {
+      console.error("Error loading history:", err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user && activeTab === 'history') {
+      loadHistory();
+    }
+  }, [user, activeTab]);
 
   const setResultsPerAccountAndSave = async (value) => {
     setResultsPerAccount(value);
@@ -209,46 +255,36 @@ const App = () => {
     return isCarousel || isImage || Boolean(item.displayUrl) || Boolean(item.url);
   };
 
-  const getItemKey = (item) => item.url || item.id || item._id || `${item.ownerUsername}-${item.timestamp}`;
+  const getItemKey = (item) => btoa(String(item.url || item.id || item._id || `${item.ownerUsername}-${item.timestamp}`));
 
-  const mergeHistory = (newItems) => {
-    const combined = [...history, ...newItems];
-    const uniqueMap = new Map();
-
-    combined.forEach(item => {
+  const mergeHistory = async (newItems) => {
+    if (!user) return;
+    const historyRef = collection(db, 'artifacts', appId, 'settings', 'config', 'history');
+    const batch = [];
+    for (const item of newItems) {
       const key = getItemKey(item);
-      const existing = uniqueMap.get(key);
-      const merged = existing ? {
-        ...existing,
-        ...item,
-        vote: item.vote || existing.vote || 'none'
-      } : { ...item, vote: item.vote || 'none' };
-
-      if (!existing || (item.likesCount || 0) > (existing.likesCount || 0)) {
-        uniqueMap.set(key, merged);
-      } else {
-        uniqueMap.set(key, merged);
-      }
-    });
-
-    return Array.from(uniqueMap.values()).sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
+      const itemRef = doc(historyRef, key);
+      batch.push(setDoc(itemRef, { ...item, vote: item.vote || 'none' }, { merge: true }));
+    }
+    await Promise.all(batch);
+    // Reload history after merge
+    await loadHistory();
   };
 
   const applyVote = async (item, vote) => {
+    if (!user) return;
     const key = getItemKey(item);
-    const nextData = data.map((current) => {
-      if (getItemKey(current) !== key) return current;
-      return { ...current, vote };
-    });
+    const historyRef = collection(db, 'artifacts', appId, 'settings', 'config', 'history');
+    const itemRef = doc(historyRef, key);
+    const updateData = { vote };
+    if (vote === 'down') {
+      updateData.downvotedAt = Date.now();
+    }
+    await setDoc(itemRef, updateData, { merge: true });
 
-    const nextHistory = mergeHistory([
-      ...history.filter((h) => getItemKey(h) !== key),
-      { ...item, vote }
-    ]);
-
-    setData(nextData);
-    setHistory(nextHistory);
-    await updateCloud({ history: nextHistory });
+    // Update local state
+    setData(prev => prev.map(current => getItemKey(current) === key ? { ...current, vote } : current));
+    setHistory(prev => prev.map(current => getItemKey(current) === key ? { ...current, vote } : current));
   };
 
   const fetchDataset = async (id) => {
@@ -275,11 +311,10 @@ const App = () => {
 
       updateCloud({
         sessionSpend: sessionSpend + actualCost,
-        history: nextHistory,
         lastScrapedMap: nextLastScrapedMap
       });
       setData(sorted);
-      setHistory(nextHistory);
+      await mergeHistory(sorted);
       setLastScrapedMap(nextLastScrapedMap);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e) {
@@ -290,14 +325,12 @@ const App = () => {
     }
   };
 
-  const estCost = ((activeUsernames.length * resultsPerAccount) / 1000) * COST_PER_1000;
   const filteredHistory = history.filter((item) => {
     if (historyFilter === 'liked') return item.vote === 'up';
     if (historyFilter === 'disliked') return item.vote === 'down';
     if (historyFilter === 'unrated') return item.vote === 'none';
     return true;
   });
-  const activeViewData = activeTab === 'history' ? filteredHistory : data;
 
   if (!isUnlocked) {
     return (
@@ -324,6 +357,10 @@ const App = () => {
       </div>
     );
   }
+
+  const estCost = (activeUsernames.length * resultsPerAccount / 1000) * COST_PER_1000;
+
+  const activeViewData = activeTab === 'results' ? data : filteredHistory;
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
@@ -511,6 +548,16 @@ const App = () => {
                     {filter === 'all' ? 'All' : filter === 'liked' ? 'Liked' : filter === 'disliked' ? 'Disliked' : 'Unrated'}
                   </button>
                 ))}
+              </div>
+            )}
+            {activeTab === 'history' && hasMoreHistory && (
+              <div className="mt-4">
+                <button
+                  onClick={() => loadHistory(true)}
+                  disabled={historyLoading}
+                  className="px-4 py-2 bg-slate-700 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-slate-600 disabled:opacity-50">
+                  {historyLoading ? 'Loading...' : 'Load More'}
+                </button>
               </div>
             )}
           </div>
