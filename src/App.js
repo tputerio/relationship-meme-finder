@@ -56,6 +56,30 @@ const App = () => {
   const [timeUnit, setTimeUnit] = useState('months');
   const [activeUsernames, setActiveUsernames] = useState([]);
   const [accountLibrary, setAccountLibrary] = useState([]);
+  const [headerVisible, setHeaderVisible] = useState(true);
+  const contentRef = React.useRef(null);
+  const loadMoreRef = React.useRef(null);
+
+  useEffect(() => {
+    const contentDiv = contentRef.current;
+    if (!contentDiv) return;
+    
+    let lastScrollY = 0;
+    const handleScroll = () => {
+      const scrollY = contentDiv.scrollTop;
+      const isScrollingDown = scrollY > lastScrollY;
+      const isNearTop = scrollY < 50;
+      
+      // Show header when near top or scrolling up, hide when scrolling down past threshold
+      setHeaderVisible(isNearTop || !isScrollingDown);
+      lastScrollY = scrollY;
+    };
+    
+    contentDiv.addEventListener('scroll', handleScroll);
+    return () => contentDiv.removeEventListener('scroll', handleScroll);
+  }, []);
+
+
 
   useEffect(() => {
     signInAnonymously(auth).catch(console.error);
@@ -517,15 +541,15 @@ const App = () => {
       </aside>
 
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <nav className="border-b border-slate-900 px-4 lg:px-8 bg-slate-950/80 backdrop-blur-xl shrink-0">
+        <nav className={`border-b border-slate-900 px-4 lg:px-8 bg-slate-950/80 backdrop-blur-xl shrink-0 transition-all duration-300 overflow-hidden ${headerVisible ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
           <div className="flex flex-col gap-4 py-4">
             <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden"><Settings2 size={20} /></button>
+              <div className="flex items-center gap-3 min-w-0">
+                <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden shrink-0"><Settings2 size={20} /></button>
                 <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
-                <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter truncate">Relationship Meme Finder</h1>
+                <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter min-w-0">Relationship Meme Finder</h1>
               </div>
-              <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2">
+              <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2 shrink-0">
                 SECURE LINK <Unlock size={10} className="text-emerald-500" />
               </div>
             </div>
@@ -539,7 +563,7 @@ const App = () => {
               </div>
             </div>
             {activeTab === 'history' && (
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
                 {['all', 'liked', 'disliked', 'unrated'].map((filter) => (
                   <button
                     key={filter}
@@ -550,19 +574,9 @@ const App = () => {
                 ))}
               </div>
             )}
-            {activeTab === 'history' && hasMoreHistory && (
-              <div className="mt-4">
-                <button
-                  onClick={() => loadHistory(true)}
-                  disabled={historyLoading}
-                  className="px-4 py-2 bg-slate-700 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-slate-600 disabled:opacity-50">
-                  {historyLoading ? 'Loading...' : 'Load More'}
-                </button>
-              </div>
-            )}
           </div>
         </nav>
-        <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
+        <div ref={contentRef} className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
           {error && <div className="mb-6 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest"><AlertCircle size={16} />{error}</div>}
           {status && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-6 animate-pulse text-[10px] font-black uppercase tracking-widest"><Loader2 className="animate-spin" size={16} />{status}</div>}
 
@@ -573,62 +587,71 @@ const App = () => {
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6 lg:gap-8 pb-20">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 lg:gap-6 pb-6">
             {activeViewData.map((meme, idx) => (
-              <div key={idx} className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden flex flex-col group hover:border-emerald-500/50 transition-all shadow-xl">
-                <div className="p-4 flex justify-between items-center border-b border-slate-800/50">
-                  <div className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
-                    <span className="font-black text-[10px] text-white uppercase tracking-tight">@{meme.ownerUsername}</span>
+              <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col group hover:border-emerald-500/50 transition-all shadow-xl">
+                <div className="p-3 flex justify-between items-center border-b border-slate-800/50 gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0" />
+                    <span className="font-black text-[10px] text-white uppercase tracking-tight truncate">@{meme.ownerUsername}</span>
                   </div>
-                  <span className="text-[10px] font-black text-slate-600 italic">
+                  <span className="text-[9px] font-black text-slate-600 italic shrink-0">
                     {meme.timestamp && (() => {
                       const date = new Date(meme.timestamp);
                       if (!Number.isNaN(date.getTime())) {
-                        return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+                        return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
                       }
                       return '';
                     })()}
                   </span>
                 </div>
-                <div className="aspect-square bg-black overflow-hidden">
+                <div className="w-full bg-black overflow-hidden" style={{minHeight: '200px', maxHeight: '400px'}}>
                   <img 
-                    src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=600&h=600&fit=cover`} 
+                    src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=800&h=600&fit=contain`} 
                     alt="Meme" 
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
+                    className="w-full h-auto object-contain bg-black" 
                     loading="lazy"
                   />
                 </div>
-                <div className="p-5 space-y-4">
-                  <div className="flex gap-2">
-                    <div className="flex-1 bg-slate-950 p-2.5 rounded-2xl text-center border border-slate-800">
-                      <div className="text-[8px] font-bold text-slate-600 uppercase mb-0.5 tracking-widest">Likes</div>
-                      <div className="text-base font-black text-white italic">{(meme.likesCount || 0).toLocaleString()}</div>
+                <div className="p-3 space-y-2.5 flex flex-col">
+                  <div className="flex gap-2 text-[9px]">
+                    <div className="flex-1 bg-slate-950 p-2 rounded-lg text-center border border-slate-800">
+                      <div className="font-bold text-slate-400">❤️ {(meme.likesCount || 0).toLocaleString()}</div>
                     </div>
-                    <div className="flex-1 bg-slate-950 p-2.5 rounded-2xl text-center border border-slate-800">
-                      <div className="text-[8px] font-bold text-slate-600 uppercase mb-0.5 tracking-widest">Comments</div>
-                      <div className="text-base font-black text-white italic">{(meme.commentsCount || 0).toLocaleString()}</div>
+                    <div className="flex-1 bg-slate-950 p-2 rounded-lg text-center border border-slate-800">
+                      <div className="font-bold text-slate-400">💬 {(meme.commentsCount || 0).toLocaleString()}</div>
                     </div>
                   </div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => applyVote(meme, meme.vote === 'up' ? 'none' : 'up')}
-                      className={`flex-1 inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${meme.vote === 'up' ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500 hover:text-white'}`}
+                      className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[9px] font-black uppercase tracking-widest transition-all ${meme.vote === 'up' ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500 hover:text-white'}`}
                     >
-                      <ThumbsUp size={16} /> {meme.vote === 'up' ? 'Liked' : 'Like'}
+                      <ThumbsUp size={14} /> Like
                     </button>
                     <button
                       onClick={() => applyVote(meme, meme.vote === 'down' ? 'none' : 'down')}
-                      className={`flex-1 inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${meme.vote === 'down' ? 'bg-red-500 text-slate-950 border-red-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-red-500 hover:text-white'}`}
+                      className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[9px] font-black uppercase tracking-widest transition-all ${meme.vote === 'down' ? 'bg-red-500 text-slate-950 border-red-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-red-500 hover:text-white'}`}
                     >
-                      <ThumbsDown size={16} /> {meme.vote === 'down' ? 'Disliked' : 'Dislike'}
+                      <ThumbsDown size={14} /> Dislike
                     </button>
                   </div>
-                  <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-white text-slate-950 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all">Open Instagram</a>
+                  <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-white text-slate-950 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest active:scale-95 transition-all">Open in Instagram</a>
                 </div>
               </div>
             ))}
           </div>
+          
+          {activeTab === 'history' && hasMoreHistory && (
+            <div className="flex justify-center mt-8 pb-8">
+              <button
+                onClick={() => loadHistory(true)}
+                disabled={historyLoading}
+                className="px-6 py-3 bg-emerald-500 text-slate-950 rounded-2xl font-black uppercase text-[11px] tracking-widest hover:bg-emerald-400 disabled:opacity-50 disabled:bg-slate-700 transition-all">
+                {historyLoading ? 'Loading...' : 'Load More'}
+              </button>
+            </div>
+          )}
         </div>
       </main>
 
