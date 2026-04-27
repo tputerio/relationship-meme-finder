@@ -33,6 +33,9 @@ const App = () => {
   const [apifyToken, setApifyToken] = useState(null);
   
   const [data, setData] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [lastScrapedMap, setLastScrapedMap] = useState({});
+  const [activeTab, setActiveTab] = useState('results');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState(null);
@@ -57,6 +60,15 @@ const App = () => {
     return onAuthStateChanged(auth, setUser);
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+    const storedToken = localStorage.getItem('rmf-apify-token');
+    if (storedToken) {
+      setApifyToken(storedToken);
+      setIsUnlocked(true);
+    }
+  }, [user]);
+
   const unlockApp = async (e) => {
     e.preventDefault();
     if (!user) return;
@@ -69,6 +81,7 @@ const App = () => {
         if (passwordInput === remotePassword) {
           setApifyToken(token);
           setIsUnlocked(true);
+          localStorage.setItem('rmf-apify-token', token);
           setError(null);
         } else {
           alert("Incorrect Password");
@@ -99,11 +112,18 @@ const App = () => {
         setTimeUnit(d.timeUnit || 'months');
         setActiveUsernames(d.activeUsernames || []);
         setAccountLibrary(d.accountLibrary || []);
+        setHistory(d.history || []);
+        setLastScrapedMap(d.lastScrapedMap || {});
       } else {
         setDoc(docRef, {
-          sessionSpend: 0, resultsPerAccount: 5, timeValue: 1, timeUnit: 'months',
+          sessionSpend: 0,
+          resultsPerAccount: 5,
+          timeValue: 1,
+          timeUnit: 'months',
           activeUsernames: ["Girlyzar"],
-          accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays"]
+          accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays"],
+          history: [],
+          lastScrapedMap: {}
         });
       }
     }, (err) => console.error("Firestore Error:", err));
@@ -167,6 +187,19 @@ const App = () => {
     }, 3000);
   };
 
+  const mergeHistory = (newItems) => {
+    const combined = [...newItems, ...history];
+    const uniqueMap = new Map();
+    combined.forEach(item => {
+      const key = item.url || item.id || item._id || `${item.ownerUsername}-${item.timestamp}`;
+      const existing = uniqueMap.get(key);
+      if (!existing || (item.likesCount || 0) > (existing.likesCount || 0)) {
+        uniqueMap.set(key, item);
+      }
+    });
+    return Array.from(uniqueMap.values()).sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
+  };
+
   const fetchDataset = async (id) => {
     try {
       const res = await fetch(`https://api.apify.com/v2/datasets/${id}/items?token=${apifyToken}`);
@@ -182,8 +215,20 @@ const App = () => {
         .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
 
       const actualCost = (items.length / 1000) * COST_PER_1000;
-      updateCloud({ sessionSpend: sessionSpend + actualCost });
+      const nextHistory = mergeHistory(sorted);
+      const nextLastScrapedMap = { ...lastScrapedMap };
+      activeUsernames.forEach((username) => {
+        nextLastScrapedMap[username] = new Date().toISOString();
+      });
+
+      updateCloud({
+        sessionSpend: sessionSpend + actualCost,
+        history: nextHistory,
+        lastScrapedMap: nextLastScrapedMap
+      });
       setData(sorted);
+      setHistory(nextHistory);
+      setLastScrapedMap(nextLastScrapedMap);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (e) {
       setError("Failed to fetch results.");
@@ -219,8 +264,16 @@ const App = () => {
           .filter(i => new Date(i.timestamp) >= cutoff)
           .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
 
-        // Since it's existing data, don't charge cost again
+        const nextHistory = mergeHistory(sorted);
+        const nextLastScrapedMap = { ...lastScrapedMap };
+        activeUsernames.forEach((username) => {
+          nextLastScrapedMap[username] = new Date().toISOString();
+        });
+
+        updateCloud({ history: nextHistory, lastScrapedMap: nextLastScrapedMap });
         setData(sorted);
+        setHistory(nextHistory);
+        setLastScrapedMap(nextLastScrapedMap);
         setLastUpdated(new Date().toLocaleTimeString());
       } else {
         setError("Failed to get dataset from existing run.");
@@ -234,6 +287,7 @@ const App = () => {
   };
 
   const estCost = ((activeUsernames.length * resultsPerAccount) / 1000) * COST_PER_1000;
+  const activeViewData = activeTab === 'history' ? history : data;
 
   if (!isUnlocked) {
     return (
@@ -308,14 +362,18 @@ const App = () => {
               <div className="space-y-1.5 bg-slate-950/30 rounded-2xl p-2 border border-slate-800/50">
                 {accountLibrary.map(u => {
                   const isActive = activeUsernames.includes(u);
+                  const lastScrapedLabel = lastScrapedMap[u] ? new Date(lastScrapedMap[u]).toLocaleString() : 'Never';
                   return (
                     <div key={u} className={`flex items-center justify-between p-2.5 rounded-xl transition-all ${isActive ? 'bg-slate-800/60' : 'opacity-40 grayscale'}`}>
                       <button 
                         onClick={() => updateCloud({ activeUsernames: isActive ? activeUsernames.filter(x => x !== u) : [...activeUsernames, u] })} 
-                        className="flex items-center gap-3 flex-1 text-left"
+                        className="flex flex-col gap-2 flex-1 text-left"
                       >
-                        <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-600'}`} />
-                        <span className="text-[11px] font-bold tracking-tight">@{u}</span>
+                        <div className="flex items-center gap-3">
+                          <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-600'}`} />
+                          <span className="text-[11px] font-bold tracking-tight">@{u}</span>
+                        </div>
+                        <span className="text-[9px] text-slate-500 uppercase tracking-widest">Last scraped: {lastScrapedLabel}</span>
                       </button>
                       <button onClick={() => updateCloud({ accountLibrary: accountLibrary.filter(x => x !== u), activeUsernames: activeUsernames.filter(x => x !== u) })} className="text-slate-600 hover:text-red-500 p-1"><Trash2 size={14} /></button>
                     </div>
@@ -421,6 +479,7 @@ const App = () => {
 
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <nav className="h-20 border-b border-slate-900 px-4 lg:px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-xl shrink-0">
+          <div className="flex flex-col gap-4 lg:gap-0 lg:flex-row lg:items-center lg:justify-between w-full">
           <div className="flex items-center gap-3">
             <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden"><Settings2 size={20} /></button>
             <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
@@ -429,13 +488,22 @@ const App = () => {
           <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2">
             SECURE LINK <Unlock size={10} className="text-emerald-500" />
           </div>
+        </div>
+        <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3 rounded-2xl bg-slate-900 border border-slate-800 p-2">
+            <button onClick={() => setActiveTab('results')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'results' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>Recent</button>
+            <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'history' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>History</button>
+          </div>
+          <div className="text-[10px] uppercase tracking-widest text-slate-500">
+            {activeTab === 'history' ? `${history.length} unique memes in history` : `Last updated: ${lastUpdated || 'Not yet scanned'}`}
+          </div>
+        </div>
         </nav>
-
         <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
           {error && <div className="mb-6 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest"><AlertCircle size={16} />{error}</div>}
           {status && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-6 animate-pulse text-[10px] font-black uppercase tracking-widest"><Loader2 className="animate-spin" size={16} />{status}</div>}
 
-          {data.length === 0 && !loading && !status && (
+          {activeViewData.length === 0 && !loading && !status && (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
               <Instagram size={64} className="mb-4" />
               <p className="font-black text-xs uppercase tracking-[0.2em]">Ready to analyze target feeds</p>
@@ -443,7 +511,7 @@ const App = () => {
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6 lg:gap-8 pb-20">
-            {data.map((meme, idx) => (
+            {activeViewData.map((meme, idx) => (
               <div key={idx} className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden flex flex-col group hover:border-emerald-500/50 transition-all shadow-xl">
                 <div className="p-4 flex justify-between items-center border-b border-slate-800/50">
                   <div className="flex items-center gap-2">
