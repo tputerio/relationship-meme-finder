@@ -147,6 +147,23 @@ const App = () => {
     });
   }, [globalAccounts, likedCountsByUsername]);
 
+  const relatedEstimate = useMemo(() => {
+    return ((Number(relatedCount) || 0) / 1000) * COST_RELATED_SCAN;
+  }, [relatedCount]);
+
+  const scanEstimateResults = useMemo(() => {
+    return activeUsernames.length * (Number(postsPerAccount) || 0);
+  }, [activeUsernames, postsPerAccount]);
+
+  const scanEstimatePrice = useMemo(() => {
+    return (scanEstimateResults / 1000) * COST_POST_SCAN;
+  }, [scanEstimateResults]);
+
+  const toggleActiveUsername = (username) => {
+    if (!username) return;
+    setActiveUsernames(prev => prev.includes(username) ? prev.filter(u => u !== username) : [...prev, username]);
+  };
+
   // --- HELPERS: AGGRESSIVE VIDEO FILTERING ---
   const isVideoItem = (item) => {
     if (!item) return false;
@@ -336,16 +353,33 @@ const App = () => {
             <div className="space-y-8">
               <section className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Search size={12}/> Related Discovery</h3>
-                <input 
-                  value={relatedTarget} onChange={e => setRelatedTarget(e.target.value)}
-                  placeholder="Seed @username..." 
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm mb-3 outline-none focus:border-emerald-500"
-                />
-                <button onClick={startRelatedScan} className="w-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 hover:text-slate-950 transition-all">Find Related Users</button>
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <input 
+                    value={relatedTarget} onChange={e => setRelatedTarget(e.target.value)}
+                    placeholder="Seed @username..." 
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm outline-none focus:border-emerald-500"
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    value={relatedCount}
+                    onChange={e => setRelatedCount(Number(e.target.value) || 0)}
+                    className="w-full sm:w-28 bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-center outline-none focus:border-emerald-500"
+                    placeholder="Count"
+                  />
+                </div>
+                <div className="mt-3 flex items-center justify-between text-[10px] text-slate-500 uppercase tracking-widest">
+                  <span>{relatedCount.toLocaleString()} related users</span>
+                  <span>${relatedEstimate.toFixed(2)} est.</span>
+                </div>
+                <button onClick={startRelatedScan} className="mt-4 w-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 hover:text-slate-950 transition-all">Find Related Users</button>
               </section>
 
               <section className="space-y-4 pt-4 border-t border-slate-800">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Harvest Settings</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">IG Post Scan</h3>
+                  <span className="text-[9px] text-slate-600 font-mono italic">{activeUsernames.length} selected</span>
+                </div>
                 <div className="space-y-4">
                   <div>
                     <label className="text-[9px] font-bold text-slate-600 uppercase mb-2 block tracking-widest">Lookback Window</label>
@@ -362,24 +396,37 @@ const App = () => {
                     <label className="text-[9px] font-bold text-slate-600 uppercase mb-2 block tracking-widest">Posts Per User</label>
                     <input type="number" value={postsPerAccount} onChange={e => setPostsPerAccount(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono" />
                   </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Accounts to scan</div>
+                      <span className="text-[9px] text-slate-500">{scanEstimateResults.toLocaleString()} posts</span>
+                    </div>
+                    <div className="grid gap-2 max-h-56 overflow-y-auto custom-scrollbar">
+                      {sortedGlobalAccounts.map(acc => (
+                        <button key={acc.id} type="button" onClick={() => toggleActiveUsername(acc.username)} className={`w-full text-left p-3 rounded-xl border transition-all ${activeUsernames.includes(acc.username) ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-slate-950/40 border-slate-800/50 hover:border-slate-600'}`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[11px] font-black text-white truncate">@{acc.username}</span>
+                            <span className="text-[9px] text-slate-500">{(likedCountsByUsername[acc.username] || 0).toLocaleString()} liked</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl bg-slate-950/50 border border-slate-800 p-3 text-[10px] text-slate-400">
+                    Estimated price: <span className="text-white">${scanEstimatePrice.toFixed(2)}</span> (@ ${COST_POST_SCAN.toFixed(2)} / 1000 results)
+                  </div>
                 </div>
               </section>
             </div>
           ) : (
             <div className="space-y-4">
                <div className="flex items-center justify-between">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Global Discovery</h3>
-                <span className="text-[9px] text-slate-600 font-mono italic">{activeUsernames.length} Selected</span>
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Related Accounts</h3>
+                <span className="text-[9px] text-slate-600 font-mono italic">{sortedGlobalAccounts.length} accounts</span>
                </div>
                <div className="space-y-1">
                 {sortedGlobalAccounts.map(acc => (
-                  <div key={acc.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${activeUsernames.includes(acc.username) ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-slate-950/40 border-slate-800/50 hover:border-slate-600'}`}>
-                    <input 
-                      type="checkbox" 
-                      checked={activeUsernames.includes(acc.username)}
-                      onChange={e => e.target.checked ? setActiveUsernames([...activeUsernames, acc.username]) : setActiveUsernames(activeUsernames.filter(u => u !== acc.username))}
-                      className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0" 
-                    />
+                  <div key={acc.id} className="flex items-center gap-3 p-3 rounded-xl border bg-slate-950/40 border-slate-800/50">
                     <div className="flex-1 min-w-0">
                       <div className="text-[11px] font-black text-white truncate">@{acc.username}</div>
                       <div className="text-[9px] text-slate-500 font-mono">{(likedCountsByUsername[acc.username] || 0).toLocaleString()} liked posts</div>
