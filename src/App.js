@@ -1,23 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, getDocs, deleteDoc, where, startAfter } from "firebase/firestore";
 import { 
-  Heart, RefreshCw, AlertCircle, Loader2, 
-  PlusCircle, Trash2, Settings2, 
-  ChevronLeft, Instagram, Lock, Unlock, Calendar,
-  ThumbsUp, ThumbsDown
+  getFirestore, doc, onSnapshot, getDoc, setDoc, updateDoc, 
+  collection, query, limit, getDocs, deleteDoc, 
+  where, writeBatch, serverTimestamp 
+} from "firebase/firestore";
+import { 
+  Heart, RefreshCw, AlertCircle, Loader2, PlusCircle, 
+  Trash2, Settings2, ChevronLeft, Instagram, Lock, 
+  Unlock, Calendar, ThumbsUp, ThumbsDown, Search, 
+  Layers, Filter, ExternalLink, Menu, X
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-const firebaseConfig = {
-  apiKey: "AIzaSyDRxa14szfTtJTQsAFqNSNy-utyWSYVR1E",
-  authDomain: "relationship-meme-finder.firebaseapp.com",
-  projectId: "relationship-meme-finder",
-  storageBucket: "relationship-meme-finder.firebasestorage.app",
-  messagingSenderId: "473667344223",
-  appId: "1:473667344223:web:02d51a75e8139f396ac8ea",
-  measurementId: "G-5RJYWZDB0Z"
+const firebaseConfig = { 
+  apiKey: "AIzaSyDRxa14szfTtJTQsAFqNSNy-utyWSYVR1E", 
+  authDomain: "relationship-meme-finder.firebaseapp.com", 
+  projectId: "relationship-meme-finder", 
+  storageBucket: "relationship-meme-finder.firebasestorage.app", 
+  messagingSenderId: "473667344223", 
+  appId: "1:473667344223:web:02d51a75e8139f396ac8ea", 
+  measurementId: "G-5RJYWZDB0Z" 
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
@@ -25,644 +29,487 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = "relationship-meme-finder";
 
-const COST_PER_1000 = 1.70;
+const COST_POST_SCAN = 1.70;
+const COST_RELATED_SCAN = 4.00;
 
 const App = () => {
   const [user, setUser] = useState(null);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [apifyToken, setApifyToken] = useState(null);
+  const [activeSidebarTab, setActiveSidebarTab] = useState('scan'); 
+  const [mainFilter, setMainFilter] = useState('unrated'); 
+  const [activeMainTab, setActiveMainTab] = useState('current'); 
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Data State
+  const [allMemes, setAllMemes] = useState([]);
+  const [currentScanData, setCurrentScanData] = useState([]);
+  const [globalAccounts, setGlobalAccounts] = useState([]);
   
-  const [data, setData] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [lastScrapedMap, setLastScrapedMap] = useState({});
-  const [historyFilter, setHistoryFilter] = useState('all');
-  const [activeTab, setActiveTab] = useState('results');
+  // Controls
+  const [relatedTarget, setRelatedTarget] = useState("");
+  const [relatedCount, setRelatedCount] = useState(20);
+  const [lookbackValue, setLookbackValue] = useState(1);
+  const [lookbackUnit, setLookbackUnit] = useState('months');
+  const [postsPerAccount, setPostsPerAccount] = useState(10);
+  const [activeUsernames, setActiveUsernames] = useState([]);
+
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
-  const [newAccount, setNewAccount] = useState("");
-  const [historyLastDoc, setHistoryLastDoc] = useState(null);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [hasMoreHistory, setHasMoreHistory] = useState(true);
 
-  const [sessionSpend, setSessionSpend] = useState(0);
-  const [resultsPerAccount, setResultsPerAccount] = useState(5);
-  const [resultsPerAccountInput, setResultsPerAccountInput] = useState('5');
-  const [timeValue, setTimeValue] = useState(1);
-  const [timeValueInput, setTimeValueInput] = useState('1');
-  const [timeUnit, setTimeUnit] = useState('months');
-  const [activeUsernames, setActiveUsernames] = useState([]);
-  const [accountLibrary, setAccountLibrary] = useState([]);
-  const [headerVisible, setHeaderVisible] = useState(true);
-  const contentRef = React.useRef(null);
-  const loadMoreRef = React.useRef(null);
-
+  // --- AUTH & INIT ---
   useEffect(() => {
-    const contentDiv = contentRef.current;
-    if (!contentDiv) return;
-    
-    let lastScrollY = 0;
-    const handleScroll = () => {
-      const scrollY = contentDiv.scrollTop;
-      const isScrollingDown = scrollY > lastScrollY;
-      const isNearTop = scrollY < 50;
-      
-      // Show header when near top or scrolling up, hide when scrolling down past threshold
-      setHeaderVisible(isNearTop || !isScrollingDown);
-      lastScrollY = scrollY;
+    const initAuth = async () => {
+      await signInAnonymously(auth);
     };
-    
-    contentDiv.addEventListener('scroll', handleScroll);
-    return () => contentDiv.removeEventListener('scroll', handleScroll);
-  }, []);
-
-
-
-  useEffect(() => {
-    signInAnonymously(auth).catch(console.error);
-    return onAuthStateChanged(auth, setUser);
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    const storedToken = localStorage.getItem('rmf-apify-token');
-    if (storedToken) {
-      setApifyToken(storedToken);
-      setIsUnlocked(true);
-    }
-  }, [user]);
-
-  const unlockApp = async (e) => {
-    e.preventDefault();
-    if (!user) return;
-    try {
-      setLoading(true);
-      const secretSnap = await getDoc(doc(db, 'secrets', 'apify'));
-      if (secretSnap.exists()) {
-        const remotePassword = secretSnap.data().password;
-        const token = secretSnap.data().token;
-        if (passwordInput === remotePassword) {
-          setApifyToken(token);
+    initAuth();
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) {
+        const storedToken = localStorage.getItem('rmf-apify-token');
+        if (storedToken) {
+          setApifyToken(storedToken);
           setIsUnlocked(true);
-          localStorage.setItem('rmf-apify-token', token);
-          setError(null);
-        } else {
-          alert("Incorrect Password");
         }
-      } else {
-        setError("Security configuration missing.");
       }
-    } catch (err) {
-      setError("Access denied.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    });
+  }, []);
 
+  // --- FIRESTORE DATA (RULE 2: Simple Queries Only) ---
   useEffect(() => {
     if (!user) return;
-    const docRef = doc(db, 'artifacts', appId, 'settings', 'config');
-    const unsub = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const d = docSnap.data();
-        setSessionSpend(d.sessionSpend || 0);
-        const resultsValue = d.resultsPerAccount ?? 5;
-        setResultsPerAccount(resultsValue);
-        setResultsPerAccountInput(String(resultsValue));
-        const lookbackValue = d.timeValue ?? 1;
-        setTimeValue(lookbackValue);
-        setTimeValueInput(String(lookbackValue));
-        setTimeUnit(d.timeUnit || 'months');
-        setActiveUsernames(d.activeUsernames || []);
-        setAccountLibrary(d.accountLibrary || []);
-        setLastScrapedMap(d.lastScrapedMap || {});
-      } else {
-        setDoc(docRef, {
-          sessionSpend: 0,
-          resultsPerAccount: 5,
-          timeValue: 1,
-          timeUnit: 'months',
-          activeUsernames: ["Girlyzar"],
-          accountLibrary: ["Girlyzar", "Drunkbetch", "Mytherapistsays"],
-          lastScrapedMap: {}
-        });
-      }
-    }, (err) => console.error("Firestore Error:", err));
-    return () => unsub();
+
+    // Listen to Global Accounts
+    const accsRef = collection(db, 'artifacts', appId, 'related_accounts');
+    const unsubAccs = onSnapshot(accsRef, (snap) => {
+      const accs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setGlobalAccounts(accs.sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0)));
+    });
+
+    // Listen to All Memes (History)
+    const memesRef = collection(db, 'artifacts', appId, 'memes');
+    const unsubMemes = onSnapshot(memesRef, (snap) => {
+      const memes = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAllMemes(memes);
+    }, (err) => {
+      console.error("Firestore error:", err);
+      setError("Failed to load history. Check permissions.");
+    });
+
+    return () => { unsubAccs(); unsubMemes(); };
   }, [user]);
 
-  const updateCloud = async (newData) => {
-    if (!user) return;
-    const configRef = doc(db, 'artifacts', appId, 'settings', 'config');
-    await setDoc(configRef, newData, { merge: true });
-  };
-
-  const loadHistory = async (loadMore = false) => {
-    if (!user || historyLoading) return;
-    setHistoryLoading(true);
-    try {
-      const historyRef = collection(db, 'artifacts', appId, 'settings', 'config', 'history');
-      let q = query(historyRef, orderBy('likesCount', 'desc'), limit(50));
-      if (loadMore && historyLastDoc) {
-        q = query(historyRef, orderBy('likesCount', 'desc'), limit(50), startAfter(historyLastDoc));
+  // --- MEMORY FILTERING & SORTING ---
+  const displayData = useMemo(() => {
+    let filtered = [];
+    
+    // 1. Filter by Scope (Current Scan vs History)
+    if (activeMainTab === 'current') {
+      const currentIds = new Set(currentScanData.map(m => m.id));
+      filtered = allMemes.filter(m => currentIds.has(m.id));
+      // Fallback if latency delays Firestore sync
+      if (filtered.length === 0 && currentScanData.length > 0) {
+        filtered = [...currentScanData];
       }
-
-      const querySnapshot = await getDocs(q);
-      const newItems = [];
-      querySnapshot.forEach((doc) => {
-        newItems.push({ id: doc.id, ...doc.data() });
-      });
-
-      // Cleanup old downvoted items
-      const now = Date.now();
-      const cutoff = now - 24 * 60 * 60 * 1000; // 24 hours ago
-      const toDelete = newItems.filter(item => item.vote === 'down' && item.downvotedAt && item.downvotedAt < cutoff);
-      for (const item of toDelete) {
-        await deleteDoc(doc(historyRef, item.id));
-      }
-      const filteredItems = newItems.filter(item => !(item.vote === 'down' && item.downvotedAt && item.downvotedAt < cutoff));
-
-      if (loadMore) {
-        setHistory(prev => [...prev, ...filteredItems]);
-      } else {
-        setHistory(filteredItems);
-      }
-      setHistoryLastDoc(querySnapshot.docs[querySnapshot.docs.length - 1]);
-      setHasMoreHistory(querySnapshot.docs.length === 50);
-    } catch (err) {
-      console.error("Error loading history:", err);
-    } finally {
-      setHistoryLoading(false);
+    } else {
+      filtered = [...allMemes];
     }
-  };
 
-  useEffect(() => {
-    if (user && activeTab === 'history') {
-      loadHistory();
-    }
-  }, [user, activeTab]);
+    // 2. Filter by Vote Status
+    if (mainFilter === 'unrated') filtered = filtered.filter(m => m.vote === 'none');
+    else if (mainFilter === 'liked') filtered = filtered.filter(m => m.vote === 'up');
+    else if (mainFilter === 'disliked') filtered = filtered.filter(m => m.vote === 'down');
 
-  const setResultsPerAccountAndSave = async (value) => {
-    setResultsPerAccount(value);
-    setResultsPerAccountInput(String(value));
-    await updateCloud({ resultsPerAccount: value });
-  };
+    // 3. Sort by likes descending
+    return filtered.sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
+  }, [allMemes, mainFilter, activeMainTab, currentScanData]);
 
-  const setTimeValueAndSave = async (value) => {
-    setTimeValue(value);
-    setTimeValueInput(String(value));
-    await updateCloud({ timeValue: value });
-  };
-
-  const fetchMemes = async () => {
-    if (!apifyToken || activeUsernames.length === 0) return;
-    setLoading(true);
-    setError(null);
-    setStatus("Scanning Instagram...");
-
-    try {
-      const response = await fetch(`https://api.apify.com/v2/acts/apify~instagram-post-scraper/runs?token=${apifyToken}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          "username": activeUsernames,
-          "resultsLimit": parseInt(resultsPerAccount),
-          "skipPinnedPosts": true,
-          "proxyConfiguration": { "useApifyProxy": true }
-        })
-      });
-      const run = await response.json();
-      pollStatus(run.data.id, run.data.defaultDatasetId);
-    } catch (err) {
-      setError("Scraper failed to start.");
-      setLoading(false);
-    }
-  };
-
-  const pollStatus = (runId, datasetId) => {
-    const timer = setInterval(async () => {
-      const res = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${apifyToken}`);
-      const result = await res.json();
-      if (result.data.status === 'SUCCEEDED') {
-        clearInterval(timer);
-        fetchDataset(datasetId);
-      } else if (['FAILED', 'ABORTED'].includes(result.data.status)) {
-        clearInterval(timer);
-        setLoading(false);
-        setError("Cloud scan failed.");
+  const likedCountsByUsername = useMemo(() => {
+    return allMemes.reduce((counts, meme) => {
+      if (meme.vote === 'up') {
+        const username = String(meme.ownerUsername || meme.username || '').trim();
+        if (username) {
+          counts[username] = (counts[username] || 0) + 1;
+        }
       }
-    }, 3000);
-  };
+      return counts;
+    }, {});
+  }, [allMemes]);
 
+  const sortedGlobalAccounts = useMemo(() => {
+    return [...globalAccounts].sort((a, b) => {
+      const aLiked = likedCountsByUsername[a.username] || 0;
+      const bLiked = likedCountsByUsername[b.username] || 0;
+      if (bLiked !== aLiked) return bLiked - aLiked;
+      return (b.likesCount || 0) - (a.likesCount || 0);
+    });
+  }, [globalAccounts, likedCountsByUsername]);
+
+  // --- HELPERS: AGGRESSIVE VIDEO FILTERING ---
   const isVideoItem = (item) => {
     if (!item) return false;
     const type = String(item.type || '').toLowerCase();
     const postType = String(item.postType || '').toLowerCase();
     const mediaType = String(item.mediaType || '').toLowerCase();
-    return item.isVideo === true
-      || type.includes('video')
-      || postType.includes('video')
-      || mediaType.includes('video')
-      || Boolean(item.videoUrl)
-      || Boolean(item.videoUrls)
-      || Boolean(item.hasOwnProperty('is_video') && item.is_video);
+    return item.isVideo === true || type.includes('video') || postType.includes('video') || mediaType.includes('video') || Boolean(item.videoUrl) || Boolean(item.videoUrls) || Boolean(item.hasOwnProperty('is_video') && item.is_video);
   };
 
   const shouldKeepPost = (item) => {
     if (!item || isVideoItem(item)) return false;
     const itemType = String(item.postType || item.type || item.mediaType || '').toLowerCase();
-    const isCarousel = itemType.includes('carousel');
+    const isCarousel = itemType.includes('carousel') || itemType.includes('sidecar');
     const isImage = itemType.includes('image') || itemType.includes('photo') || itemType.includes('post');
     return isCarousel || isImage || Boolean(item.displayUrl) || Boolean(item.url);
   };
 
-  const getItemKey = (item) => btoa(String(item.url || item.id || item._id || `${item.ownerUsername}-${item.timestamp}`));
-
-  const mergeHistory = async (newItems) => {
-    if (!user) return;
-    const historyRef = collection(db, 'artifacts', appId, 'settings', 'config', 'history');
-    const batch = [];
-    for (const item of newItems) {
-      const key = getItemKey(item);
-      const itemRef = doc(historyRef, key);
-      batch.push(setDoc(itemRef, { ...item, vote: item.vote || 'none' }, { merge: true }));
-    }
-    await Promise.all(batch);
-    // Reload history after merge
-    await loadHistory();
+  // --- APIFY LOGIC ---
+  const pollApify = async (runId, type) => {
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${apifyToken}`);
+        const result = await res.json();
+        if (result.data.status === 'SUCCEEDED') {
+          clearInterval(timer);
+          processResults(result.data.defaultDatasetId, type);
+        } else if (['FAILED', 'ABORTED', 'TIMED-OUT'].includes(result.data.status)) {
+          clearInterval(timer);
+          setLoading(false);
+          setError(`${type} scan ${result.data.status.toLowerCase()}.`);
+        }
+      } catch (e) {
+        clearInterval(timer);
+        setLoading(false);
+      }
+    }, 3000);
   };
 
-  const applyVote = async (item, vote) => {
-    if (!user) return;
-    const key = getItemKey(item);
-    const historyRef = collection(db, 'artifacts', appId, 'settings', 'config', 'history');
-    const itemRef = doc(historyRef, key);
-    const updateData = { vote };
-    if (vote === 'down') {
-      updateData.downvotedAt = Date.now();
-    }
-    await setDoc(itemRef, updateData, { merge: true });
-
-    // Update local state
-    setData(prev => prev.map(current => getItemKey(current) === key ? { ...current, vote } : current));
-    setHistory(prev => prev.map(current => getItemKey(current) === key ? { ...current, vote } : current));
-  };
-
-  const fetchDataset = async (id) => {
+  const processResults = async (datasetId, type) => {
     try {
-      const res = await fetch(`https://api.apify.com/v2/datasets/${id}/items?token=${apifyToken}`);
+      const res = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?token=${apifyToken}`);
       const items = await res.json();
-      const now = new Date();
-      let cutoff = new Date();
-      if (timeUnit === 'days') cutoff.setDate(now.getDate() - timeValue);
-      else if (timeUnit === 'weeks') cutoff.setDate(now.getDate() - (timeValue * 7));
-      else if (timeUnit === 'months') cutoff.setMonth(now.getMonth() - timeValue);
+      
+      const batch = writeBatch(db);
+      if (type === 'RELATED') {
+        items.forEach(acc => {
+          if (!acc.username) return;
+          const ref = doc(db, 'artifacts', appId, 'related_accounts', acc.username);
+          batch.set(ref, {
+            username: acc.username,
+            followers: acc.followersCount || 0,
+            likesCount: acc.likesCount || 0,
+            lastFound: Date.now(),
+          }, { merge: true });
+        });
+        setStatus("Library updated with related users!");
+      } else {
+        const filteredPosts = items.filter(shouldKeepPost);
+        const newCurrentData = [];
 
-      const filtered = items.filter(shouldKeepPost).map(item => ({ ...item, vote: item.vote || 'none' }));
-      const sorted = filtered
-        .filter(i => new Date(i.timestamp) >= cutoff)
-        .sort((a, b) => (b.likesCount || 0) - (a.likesCount || 0));
+        filteredPosts.forEach(post => {
+          const id = btoa(post.url).replace(/\//g, '_');
+          const postData = {
+            ...post,
+            vote: post.vote || 'none',
+            createdAt: serverTimestamp()
+          };
+          
+          newCurrentData.push({ id, ...post, vote: post.vote || 'none' });
+          const postRef = doc(db, 'artifacts', appId, 'memes', id);
+          batch.set(postRef, postData, { merge: true });
+        });
 
-      const actualCost = (filtered.length / 1000) * COST_PER_1000;
-      const nextHistory = mergeHistory(sorted);
-      const nextLastScrapedMap = { ...lastScrapedMap };
-      activeUsernames.forEach((username) => {
-        nextLastScrapedMap[username] = new Date().toISOString();
-      });
-
-      updateCloud({
-        sessionSpend: sessionSpend + actualCost,
-        lastScrapedMap: nextLastScrapedMap
-      });
-      setData(sorted);
-      await mergeHistory(sorted);
-      setLastScrapedMap(nextLastScrapedMap);
-      setLastUpdated(new Date().toLocaleTimeString());
+        setCurrentScanData(newCurrentData);
+        setActiveMainTab('current');
+        setStatus(`Harvested ${filteredPosts.length} new images!`);
+      }
+      await batch.commit();
     } catch (e) {
-      setError("Failed to fetch results.");
+      setError("Failed to save results.");
     } finally {
       setLoading(false);
-      setStatus("");
+      setTimeout(() => setStatus(""), 3000);
     }
   };
 
-  const filteredHistory = history.filter((item) => {
-    if (historyFilter === 'liked') return item.vote === 'up';
-    if (historyFilter === 'disliked') return item.vote === 'down';
-    if (historyFilter === 'unrated') return item.vote === 'none';
-    return true;
-  });
+  const startRelatedScan = async () => {
+    if (!relatedTarget) return;
+    setLoading(true);
+    setStatus("Scouting related accounts...");
+    try {
+      const res = await fetch(`https://api.apify.com/v2/acts/thenetaji~instagram-related-user-scraper/runs?token=${apifyToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ "username": [relatedTarget.replace('@','')], "maxItem": parseInt(relatedCount) })
+      });
+      const run = await res.json();
+      pollApify(run.data.id, 'RELATED');
+    } catch (e) { setError("Discovery failed."); setLoading(false); }
+  };
+
+  const startPostScan = async () => {
+    if (activeUsernames.length === 0) return;
+    setLoading(true);
+    setStatus("Harvesting latest memes...");
+    try {
+      const res = await fetch(`https://api.apify.com/v2/acts/apify~instagram-post-scraper/runs?token=${apifyToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          "username": activeUsernames,
+          "resultsLimit": parseInt(postsPerAccount),
+          "onlyPostsNewerThan": `${lookbackValue} ${lookbackUnit}`,
+          "skipPinnedPosts": true
+        })
+      });
+      const run = await res.json();
+      pollApify(run.data.id, 'POSTS');
+    } catch (e) { setError("Scan failed."); setLoading(false); }
+  };
+
+  const handleVote = async (post, vote) => {
+    const id = post.id || btoa(post.url).replace(/\//g, '_');
+    const postRef = doc(db, 'artifacts', appId, 'memes', id);
+    await updateDoc(postRef, { 
+      vote: vote,
+      votedAt: vote === 'down' ? Date.now() : null 
+    });
+  };
+
+  const unlockApp = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const secretSnap = await getDoc(doc(db, 'secrets', 'apify'));
+      if (secretSnap.exists() && passwordInput === secretSnap.data().password) {
+        setApifyToken(secretSnap.data().token);
+        setIsUnlocked(true);
+        localStorage.setItem('rmf-apify-token', secretSnap.data().token);
+      } else {
+        setError("Invalid Access Key");
+      }
+    } catch(err) { setError("Auth Error"); }
+    setLoading(false);
+  };
 
   if (!isUnlocked) {
     return (
-      <div className="h-screen bg-slate-950 flex items-center justify-center p-6 touch-none">
-        <form onSubmit={unlockApp} className="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] w-full max-w-sm text-center shadow-2xl">
-          <div className="bg-emerald-500/10 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <Lock className="text-emerald-500" size={28} />
-          </div>
-          <h2 className="text-white font-black text-xl uppercase tracking-tighter mb-2 italic">Access Restricted</h2>
-          <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-8">Verification Required</p>
+      <div className="h-screen bg-slate-950 flex items-center justify-center p-6">
+        <form onSubmit={unlockApp} className="bg-slate-900 border border-slate-800 p-8 rounded-3xl w-full max-w-sm text-center shadow-2xl">
+          <Lock className="text-emerald-500 mx-auto mb-6" size={40} />
+          <h2 className="text-white font-black text-xl uppercase tracking-tighter mb-2 italic">Intelligence Terminal</h2>
+          <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mb-8">Relationship Meme Finder v2.2</p>
           <input 
-            type="password" 
-            value={passwordInput}
-            onChange={(e) => setPasswordInput(e.target.value)}
-            placeholder="Enter Password"
-            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-center text-white outline-none focus:border-emerald-500 mb-4 font-black text-base"
-            style={{ fontSize: '16px' }} 
+            type="password" value={passwordInput} 
+            onChange={e => setPasswordInput(e.target.value)} 
+            placeholder="Enter System Password" 
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white outline-none focus:border-emerald-500 mb-4 font-mono text-center" 
           />
-          <button type="submit" disabled={loading} className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl hover:bg-emerald-400 active:scale-95 transition-all uppercase tracking-widest text-xs flex items-center justify-center gap-2">
-            {loading && <Loader2 className="animate-spin" size={14} />}
-            {loading ? "Verifying..." : "Unlock"}
-          </button>
+          <button className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-xl hover:bg-emerald-400 transition-all uppercase tracking-widest text-xs">Authorize</button>
         </form>
       </div>
     );
   }
 
-  const estCost = (activeUsernames.length * resultsPerAccount / 1000) * COST_PER_1000;
-
-  const activeViewData = activeTab === 'results' ? data : filteredHistory;
-
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans overflow-hidden">
-      {/* Mobile Sidebar Overlay */}
+    <div className="flex min-h-screen bg-slate-950 text-slate-100 overflow-hidden overflow-x-hidden font-sans">
+      {/* MOBILE OVERLAY */}
       {isSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden" 
-          onClick={() => setIsSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] lg:hidden" onClick={() => setIsSidebarOpen(false)} />
       )}
 
-      <aside className={`fixed lg:relative h-full z-50 transition-all duration-300 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 overflow-hidden ${isSidebarOpen ? 'translate-x-0 w-[85vw] lg:w-80' : '-translate-x-full lg:translate-x-0 lg:w-0'}`}>
-        <div className="flex flex-col h-full w-full">
-          <div className="p-6 border-b border-slate-800 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-3">
-              <Settings2 className="text-emerald-500" size={20} />
-              <h2 className="font-black text-xs uppercase tracking-widest">Settings</h2>
-            </div>
-            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden text-slate-500 p-2"><ChevronLeft size={24} /></button>
-          </div>
-
-          <div className="p-6 space-y-8 flex-1 overflow-y-auto custom-scrollbar">
-            <section>
-              <label className="text-[10px] font-black text-slate-500 uppercase mb-4 block tracking-widest">User Library</label>
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                const clean = newAccount.replace('@', '').trim();
-                if (clean) {
-                  updateCloud({ 
-                    accountLibrary: Array.from(new Set([...accountLibrary, clean])), 
-                    activeUsernames: [...activeUsernames, clean] 
-                  });
-                  setNewAccount("");
-                }
-              }} className="flex gap-2 mb-4">
-                <input 
-                  type="text" 
-                  value={newAccount} 
-                  onChange={(e) => setNewAccount(e.target.value)} 
-                  placeholder="Add @user..." 
-                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm flex-1 outline-none focus:border-emerald-500" 
-                  style={{ fontSize: '16px' }}
-                />
-                <button type="submit" className="text-emerald-500 p-1 active:scale-90 transition-transform"><PlusCircle size={24} /></button>
-              </form>
-              <div className="space-y-1.5 bg-slate-950/30 rounded-2xl p-2 border border-slate-800/50">
-                {accountLibrary.map(u => {
-                  const isActive = activeUsernames.includes(u);
-                  const lastScrapedLabel = lastScrapedMap[u] ? new Date(lastScrapedMap[u]).toLocaleString() : 'Never';
-                  return (
-                    <div key={u} className={`flex items-center justify-between p-2.5 rounded-xl transition-all ${isActive ? 'bg-slate-800/60' : 'opacity-40 grayscale'}`}>
-                      <button 
-                        onClick={() => updateCloud({ activeUsernames: isActive ? activeUsernames.filter(x => x !== u) : [...activeUsernames, u] })} 
-                        className="flex flex-col gap-2 flex-1 text-left"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-600'}`} />
-                          <span className="text-[11px] font-bold tracking-tight">@{u}</span>
-                        </div>
-                        <span className="text-[9px] text-slate-500 uppercase tracking-widest">Last scraped: {lastScrapedLabel}</span>
-                      </button>
-                      <button onClick={() => updateCloud({ accountLibrary: accountLibrary.filter(x => x !== u), activeUsernames: activeUsernames.filter(x => x !== u) })} className="text-slate-600 hover:text-red-500 p-1"><Trash2 size={14} /></button>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-            
-            <section className="space-y-6 pt-6 border-t border-slate-800">
-              <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase mb-3 block tracking-widest">Lookback Window</label>
-                <div className="flex gap-2 mb-3">
-                  <input 
-                    type="number" 
-                    value={timeValueInput} 
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      setTimeValueInput(nextValue);
-                      const parsed = parseInt(nextValue, 10);
-                      if (!Number.isNaN(parsed) && parsed > 0) {
-                        setTimeValue(parsed);
-                      }
-                    }}
-                    onBlur={() => {
-                      const parsed = parseInt(timeValueInput, 10);
-                      const valid = !Number.isNaN(parsed) && parsed > 0 ? parsed : 1;
-                      setTimeValueAndSave(valid);
-                    }}
-                    className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-1/3 font-black text-lg outline-none text-center" 
-                    style={{ fontSize: '16px' }}
-                  />
-                  <select 
-                    value={timeUnit} 
-                    onChange={(e) => updateCloud({ timeUnit: e.target.value })}
-                    className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex-1 font-black text-xs uppercase tracking-widest outline-none"
-                    style={{ fontSize: '16px' }}
-                  >
-                    <option value="days">Days</option>
-                    <option value="weeks">Weeks</option>
-                    <option value="months">Months</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase mb-3 block tracking-widest">Posts per Account</label>
-                <input 
-                  type="number" 
-                  inputMode="numeric"
-                  value={resultsPerAccountInput} 
-                  onChange={(e) => {
-                    const nextValue = e.target.value;
-                    setResultsPerAccountInput(nextValue);
-                    const parsed = parseInt(nextValue, 10);
-                    if (!Number.isNaN(parsed) && parsed > 0) {
-                      setResultsPerAccount(parsed);
-                    }
-                  }}
-                  onBlur={() => {
-                    const parsed = parseInt(resultsPerAccountInput, 10);
-                    const valid = !Number.isNaN(parsed) && parsed > 0 ? parsed : 5;
-                    setResultsPerAccountAndSave(valid);
-                  }}
-                  className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full font-black text-xl outline-none focus:border-emerald-500" 
-                  style={{ fontSize: '16px' }}
-                />
-              </div>
-
-              <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50 space-y-2">
-                <div className="flex justify-between items-center text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                   <span>Est. Scan Cost</span>
-                   <span className="text-emerald-500 italic">${estCost.toFixed(3)}</span>
-                </div>
-                <div className="flex justify-between items-center text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                   <span>Lifetime Cost</span>
-                   <span className="text-white italic">${sessionSpend.toFixed(3)}</span>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div className="p-6 border-t border-slate-800 shrink-0">
-            <button 
-              onClick={fetchMemes} 
-              disabled={loading || activeUsernames.length === 0} 
-              className="w-full bg-emerald-500 text-slate-950 py-4 lg:py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 mb-4"
-            >
-              {loading ? <Loader2 className="animate-spin" size={20} /> : <RefreshCw size={20} />}
-              <span className="tracking-widest text-xs uppercase">{loading ? "SCANNING..." : "START SCAN"}</span>
-            </button>
-            {/* TEMPORARY CODE: Button to fetch from existing run */}
-          </div>
+      {/* SIDEBAR */}
+      <aside className={`fixed inset-y-0 left-0 lg:static z-[70] h-screen min-h-screen bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden relative ${isSidebarOpen ? 'w-[85vw] max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full lg:translate-x-0 lg:w-80 lg:max-w-none'}`}>
+        {isSidebarOpen && (
+          <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden absolute top-4 right-4 p-2 rounded-xl bg-slate-800/90 text-slate-100 shadow-lg shadow-slate-950/25">
+            <X size={18} />
+          </button>
+        )}
+        <div className="flex border-b border-slate-800 shrink-0">
+          <button onClick={() => setActiveSidebarTab('scan')} className={`flex-1 p-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 ${activeSidebarTab === 'scan' ? 'bg-slate-800 text-emerald-500' : 'text-slate-500'}`}><RefreshCw size={14}/> Setup Scan</button>
+          <button onClick={() => setActiveSidebarTab('library')} className={`flex-1 p-4 text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 ${activeSidebarTab === 'library' ? 'bg-slate-800 text-emerald-500' : 'text-slate-500'}`}><Layers size={14}/> Library</button>
         </div>
-      </aside>
 
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <nav className={`border-b border-slate-900 px-4 lg:px-8 bg-slate-950/80 backdrop-blur-xl shrink-0 transition-all duration-300 overflow-hidden ${headerVisible ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
-          <div className="flex flex-col gap-4 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <button onClick={() => setIsSidebarOpen(true)} className="bg-slate-900 p-2 rounded-xl lg:hidden shrink-0"><Settings2 size={20} /></button>
-                <div className="bg-emerald-500 p-2 rounded-xl shrink-0"><Heart className="text-white fill-white" size={16} /></div>
-                <h1 className="text-base lg:text-xl font-black text-white uppercase italic tracking-tighter min-w-0">Relationship Meme Finder</h1>
-              </div>
-              <div className="hidden sm:flex text-[9px] font-black text-slate-500 uppercase tracking-widest items-center gap-2 shrink-0">
-                SECURE LINK <Unlock size={10} className="text-emerald-500" />
-              </div>
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+          {activeSidebarTab === 'scan' ? (
+            <div className="space-y-8">
+              <section className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Search size={12}/> Related Discovery</h3>
+                <input 
+                  value={relatedTarget} onChange={e => setRelatedTarget(e.target.value)}
+                  placeholder="Seed @username..." 
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm mb-3 outline-none focus:border-emerald-500"
+                />
+                <button onClick={startRelatedScan} className="w-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 hover:text-slate-950 transition-all">Find Related Users</button>
+              </section>
+
+              <section className="space-y-4 pt-4 border-t border-slate-800">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Harvest Settings</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-600 uppercase mb-2 block tracking-widest">Lookback Window</label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input type="number" value={lookbackValue} onChange={e => setLookbackValue(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl p-3 w-full sm:w-16 text-center font-mono" />
+                      <select value={lookbackUnit} onChange={e => setLookbackUnit(e.target.value)} className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-[10px] font-black uppercase">
+                        <option value="days">Days</option>
+                        <option value="weeks">Weeks</option>
+                        <option value="months">Months</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-bold text-slate-600 uppercase mb-2 block tracking-widest">Posts Per User</label>
+                    <input type="number" value={postsPerAccount} onChange={e => setPostsPerAccount(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono" />
+                  </div>
+                </div>
+              </section>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-wrap gap-2 rounded-2xl bg-slate-900 border border-slate-800 p-2">
-                <button onClick={() => setActiveTab('results')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'results' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>Recent</button>
-                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-2xl font-black uppercase text-[10px] tracking-widest ${activeTab === 'history' ? 'bg-emerald-500 text-slate-950' : 'text-slate-500 hover:text-white'}`}>History</button>
-              </div>
-              <div className="text-[10px] uppercase tracking-widest text-slate-500">
-                {activeTab === 'history' ? `${filteredHistory.length} memes in ${historyFilter}` : `Last updated: ${lastUpdated || 'Not yet scanned'}`}
-              </div>
-            </div>
-            {activeTab === 'history' && (
-              <div className="flex flex-wrap gap-2">
-                {['all', 'liked', 'disliked', 'unrated'].map((filter) => (
-                  <button
-                    key={filter}
-                    onClick={() => setHistoryFilter(filter)}
-                    className={`px-3 py-2 text-[9px] font-black uppercase tracking-widest rounded-2xl border transition-all ${historyFilter === filter ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'text-slate-400 border-slate-700 hover:text-white hover:border-slate-500'}`}>
-                    {filter === 'all' ? 'All' : filter === 'liked' ? 'Liked' : filter === 'disliked' ? 'Disliked' : 'Unrated'}
-                  </button>
+          ) : (
+            <div className="space-y-4">
+               <div className="flex items-center justify-between">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Global Discovery</h3>
+                <span className="text-[9px] text-slate-600 font-mono italic">{activeUsernames.length} Selected</span>
+               </div>
+               <div className="space-y-1">
+                {sortedGlobalAccounts.map(acc => (
+                  <div key={acc.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${activeUsernames.includes(acc.username) ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-slate-950/40 border-slate-800/50 hover:border-slate-600'}`}>
+                    <input 
+                      type="checkbox" 
+                      checked={activeUsernames.includes(acc.username)}
+                      onChange={e => e.target.checked ? setActiveUsernames([...activeUsernames, acc.username]) : setActiveUsernames(activeUsernames.filter(u => u !== acc.username))}
+                      className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0" 
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] font-black text-white truncate">@{acc.username}</div>
+                      <div className="text-[9px] text-slate-500 font-mono">{(likedCountsByUsername[acc.username] || 0).toLocaleString()} liked posts</div>
+                    </div>
+                  </div>
                 ))}
-              </div>
-            )}
-          </div>
-        </nav>
-        <div ref={contentRef} className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
-          {error && <div className="mb-6 bg-red-500/10 border border-red-500/30 text-red-400 p-4 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest"><AlertCircle size={16} />{error}</div>}
-          {status && <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 p-4 rounded-2xl flex items-center gap-4 mb-6 animate-pulse text-[10px] font-black uppercase tracking-widest"><Loader2 className="animate-spin" size={16} />{status}</div>}
-
-          {activeViewData.length === 0 && !loading && !status && (
-            <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
-              <Instagram size={64} className="mb-4" />
-              <p className="font-black text-xs uppercase tracking-[0.2em]">Ready to analyze target feeds</p>
+               </div>
             </div>
           )}
+        </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 lg:gap-6 pb-6">
-            {activeViewData.map((meme, idx) => (
-              <div key={idx} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col group hover:border-emerald-500/50 transition-all shadow-xl">
-                <div className="p-3 flex justify-between items-center border-b border-slate-800/50 gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0" />
+        {activeSidebarTab === 'scan' && (
+          <div className="p-6 border-t border-slate-800">
+            <button onClick={startPostScan} disabled={loading || activeUsernames.length === 0} className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl flex items-center justify-center gap-3 active:scale-95 disabled:opacity-30 shadow-lg shadow-emerald-500/20">
+              {loading ? <Loader2 className="animate-spin" /> : <RefreshCw size={18}/>}
+              <span className="tracking-widest text-[11px] uppercase">Harvest Posts</span>
+            </button>
+          </div>
+        )}
+      </aside>
+
+      {/* MAIN VIEW */}
+      <main className="flex-1 flex flex-col min-w-0 bg-slate-950">
+        
+        {/* MOBILE-FIRST HEADER */}
+        <header className="flex flex-col gap-3 p-4 lg:px-8 border-b border-slate-900 bg-slate-950/80 backdrop-blur-xl shrink-0 z-50">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 lg:hidden text-emerald-500 bg-slate-900 rounded-xl border border-slate-800 shrink-0">
+                {isSidebarOpen ? <X size={18} /> : <Menu size={18} />}
+              </button>
+              <div className="bg-emerald-500 p-1.5 lg:p-2 rounded-lg shrink-0 shadow-lg shadow-emerald-500/30">
+                <Heart className="text-white fill-white" size={14} />
+              </div>
+              <h1 className="text-sm lg:text-base font-black text-white uppercase italic tracking-tighter truncate">Meme Intel</h1>
+            </div>
+            
+            <div className="flex bg-slate-900 rounded-xl p-1 shrink-0">
+              <button onClick={() => setActiveMainTab('current')} className={`px-3 sm:px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${activeMainTab === 'current' ? 'bg-slate-800 text-emerald-500 shadow-sm' : 'text-slate-500'}`}>Current</button>
+              <button onClick={() => setActiveMainTab('history')} className={`px-3 sm:px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${activeMainTab === 'history' ? 'bg-slate-800 text-emerald-500 shadow-sm' : 'text-slate-500'}`}>History</button>
+            </div>
+          </div>
+          
+          <div className="flex gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl overflow-x-auto no-scrollbar">
+            {['unrated', 'liked', 'disliked', 'all'].map(f => (
+              <button key={f} onClick={() => setMainFilter(f)} className={`flex-1 min-w-[60px] px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${mainFilter === f ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-500 hover:text-slate-300'}`}>{f}</button>
+            ))}
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4 lg:p-8 custom-scrollbar">
+          {error && <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase"><AlertCircle size={16} /> {error}</div>}
+          {status && <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 rounded-2xl flex items-center gap-3 text-[10px] font-black uppercase animate-pulse"><Loader2 size={16} className="animate-spin" /> {status}</div>}
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 lg:gap-8">
+            {displayData.map((meme, idx) => (
+              <div key={meme.id || idx} className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden flex flex-col group hover:border-emerald-500/40 transition-all shadow-xl hover:shadow-emerald-500/5">
+                <div className="p-4 flex justify-between items-center bg-slate-900/50 backdrop-blur-sm border-b border-slate-800/50">
+                  <div className="flex items-center gap-2 truncate">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-sm" />
                     <span className="font-black text-[10px] text-white uppercase tracking-tight truncate">@{meme.ownerUsername}</span>
                   </div>
-                  <span className="text-[9px] font-black text-slate-600 italic shrink-0">
-                    {meme.timestamp && (() => {
-                      const date = new Date(meme.timestamp);
-                      if (!Number.isNaN(date.getTime())) {
-                        return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-                      }
-                      return '';
-                    })()}
+                  <span className="text-[9px] font-mono text-slate-600 shrink-0">
+                    {meme.timestamp ? new Date(meme.timestamp).toLocaleDateString() : ''}
                   </span>
                 </div>
-                <div className="w-full bg-black overflow-hidden" style={{minHeight: '200px', maxHeight: '400px'}}>
+                
+                <div className="relative aspect-[4/5] sm:aspect-square bg-slate-950 flex items-center justify-center overflow-hidden">
                   <img 
-                    src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=800&h=600&fit=contain`} 
-                    alt="Meme" 
-                    className="w-full h-auto object-contain bg-black" 
-                    loading="lazy"
+                    src={`https://images.weserv.nl/?url=${encodeURIComponent(meme.displayUrl)}&w=600&fit=contain`} 
+                    alt="Intelligence Result" 
+                    className="w-full h-full max-w-full object-contain"
+                    loading="lazy" 
                   />
                 </div>
-                <div className="p-3 space-y-2.5 flex flex-col">
-                  <div className="flex gap-2 text-[9px]">
-                    <div className="flex-1 bg-slate-950 p-2 rounded-lg text-center border border-slate-800">
-                      <div className="font-bold text-slate-400">❤️ {(meme.likesCount || 0).toLocaleString()}</div>
+
+                <div className="p-4 space-y-4">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-2 text-center">
+                      <div className="text-[8px] text-slate-500 font-black uppercase">Likes</div>
+                      <div className="text-xs font-mono text-emerald-500">{(meme.likesCount || 0).toLocaleString()}</div>
                     </div>
-                    <div className="flex-1 bg-slate-950 p-2 rounded-lg text-center border border-slate-800">
-                      <div className="font-bold text-slate-400">💬 {(meme.commentsCount || 0).toLocaleString()}</div>
+                    <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-2 text-center">
+                      <div className="text-[8px] text-slate-500 font-black uppercase">Comments</div>
+                      <div className="text-xs font-mono text-white">{(meme.commentsCount || 0).toLocaleString()}</div>
                     </div>
                   </div>
+
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => applyVote(meme, meme.vote === 'up' ? 'none' : 'up')}
-                      className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[9px] font-black uppercase tracking-widest transition-all ${meme.vote === 'up' ? 'bg-emerald-500 text-slate-950 border-emerald-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500 hover:text-white'}`}
+                    <button 
+                      onClick={() => handleVote(meme, meme.vote === 'up' ? 'none' : 'up')}
+                      className={`flex-1 py-3 rounded-xl border flex items-center justify-center gap-2 transition-all ${meme.vote === 'up' ? 'bg-emerald-500 border-emerald-500 text-slate-950' : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-emerald-500 hover:border-emerald-500'}`}
                     >
-                      <ThumbsUp size={14} /> Like
+                      <ThumbsUp size={16} />
                     </button>
-                    <button
-                      onClick={() => applyVote(meme, meme.vote === 'down' ? 'none' : 'down')}
-                      className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[9px] font-black uppercase tracking-widest transition-all ${meme.vote === 'down' ? 'bg-red-500 text-slate-950 border-red-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-red-500 hover:text-white'}`}
+                    <button 
+                      onClick={() => handleVote(meme, meme.vote === 'down' ? 'none' : 'down')}
+                      className={`flex-1 py-3 rounded-xl border flex items-center justify-center gap-2 transition-all ${meme.vote === 'down' ? 'bg-red-500 border-red-500 text-slate-950' : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-red-500 hover:border-red-500'}`}
                     >
-                      <ThumbsDown size={14} /> Dislike
+                      <ThumbsDown size={16} />
                     </button>
                   </div>
-                  <a href={meme.url} target="_blank" rel="noreferrer" className="block text-center bg-white text-slate-950 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest active:scale-95 transition-all">Open in Instagram</a>
+
+                  <a 
+                    href={meme.url} target="_blank" rel="noreferrer" 
+                    className="w-full bg-white text-slate-950 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest text-center flex items-center justify-center gap-2 hover:bg-slate-200 transition-colors"
+                  >
+                    Open in Instagram <ExternalLink size={12} />
+                  </a>
                 </div>
               </div>
             ))}
           </div>
           
-          {activeTab === 'history' && hasMoreHistory && (
-            <div className="flex justify-center mt-8 pb-8">
-              <button
-                onClick={() => loadHistory(true)}
-                disabled={historyLoading}
-                className="px-6 py-3 bg-emerald-500 text-slate-950 rounded-2xl font-black uppercase text-[11px] tracking-widest hover:bg-emerald-400 disabled:opacity-50 disabled:bg-slate-700 transition-all">
-                {historyLoading ? 'Loading...' : 'Load More'}
-              </button>
+          {displayData.length === 0 && !loading && (
+            <div className="h-[60vh] flex flex-col items-center justify-center text-center text-slate-700">
+              <Instagram size={48} className="mb-4 opacity-20" />
+              <p className="font-black text-[11px] uppercase tracking-[0.3em] opacity-40">No intelligence found in current sector</p>
             </div>
           )}
         </div>
       </main>
 
       <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; } 
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #10b981; border-radius: 10px; }
-        input[type="number"]::-webkit-inner-spin-button, 
-        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        @media (max-width: 1024px) {
-          input, select, textarea { font-size: 16px !important; }
-        }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+        img { user-select: none; -webkit-user-drag: none; }
       `}</style>
     </div>
   );
