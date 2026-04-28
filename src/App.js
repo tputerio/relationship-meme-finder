@@ -46,6 +46,9 @@ const App = () => {
   const [allMemes, setAllMemes] = useState([]);
   const [currentScanData, setCurrentScanData] = useState([]);
   const [globalAccounts, setGlobalAccounts] = useState([]);
+  const [scanHistory, setScanHistory] = useState([]);
+  const [selectedScanId, setSelectedScanId] = useState(null);
+  const [currentScanDocId, setCurrentScanDocId] = useState(null);
   
   // Controls
   const [relatedTarget, setRelatedTarget] = useState("");
@@ -98,7 +101,15 @@ const App = () => {
       setError("Failed to load history. Check permissions.");
     });
 
-    return () => { unsubAccs(); unsubMemes(); };
+    const scansRef = collection(db, 'artifacts', appId, 'scan_history');
+    const unsubScans = onSnapshot(scansRef, (snap) => {
+      const scans = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setScanHistory(scans.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+    }, (err) => {
+      console.error("Firestore scan history error:", err);
+    });
+
+    return () => { unsubAccs(); unsubMemes(); unsubScans(); };
   }, [user]);
 
   // --- MEMORY FILTERING & SORTING ---
@@ -163,6 +174,25 @@ const App = () => {
     if (!username) return;
     setActiveUsernames(prev => prev.includes(username) ? prev.filter(u => u !== username) : [...prev, username]);
   };
+
+  const selectScan = (scanId) => {
+    setSelectedScanId(scanId);
+    setActiveMainTab('current');
+    const postsForScan = allMemes.filter(m => m.scanId === scanId);
+    if (postsForScan.length) {
+      setCurrentScanData(postsForScan);
+    }
+  };
+
+  const selectedScan = useMemo(() => scanHistory.find(scan => scan.id === selectedScanId), [scanHistory, selectedScanId]);
+
+  useEffect(() => {
+    if (!selectedScanId) return;
+    const postsForScan = allMemes.filter(m => m.scanId === selectedScanId);
+    if (postsForScan.length) {
+      setCurrentScanData(postsForScan);
+    }
+  }, [selectedScanId, allMemes]);
 
   // --- HELPERS: AGGRESSIVE VIDEO FILTERING ---
   const isVideoItem = (item) => {
@@ -229,21 +259,35 @@ const App = () => {
           const postData = {
             ...post,
             vote: post.vote || 'none',
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            scanId: currentScanDocId || null,
           };
           
-          newCurrentData.push({ id, ...post, vote: post.vote || 'none' });
+          newCurrentData.push({ id, scanId: currentScanDocId || null, ...post, vote: post.vote || 'none' });
           const postRef = doc(db, 'artifacts', appId, 'memes', id);
           batch.set(postRef, postData, { merge: true });
         });
 
+        if (currentScanDocId) {
+          const historyRef = doc(db, 'artifacts', appId, 'scan_history', currentScanDocId);
+          batch.set(historyRef, {
+            status: 'completed',
+            postCount: filteredPosts.length,
+            completedAt: serverTimestamp(),
+            scanId: currentScanDocId,
+          }, { merge: true });
+        }
+
         setCurrentScanData(newCurrentData);
         setActiveMainTab('current');
-        setStatus(`Harvested ${filteredPosts.length} new images!`);
+        setStatus(`Scanned ${filteredPosts.length} new posts!`);
       }
       await batch.commit();
     } catch (e) {
       setError("Failed to save results.");
+      if (currentScanDocId) {
+        await updateDoc(doc(db, 'artifacts', appId, 'scan_history', currentScanDocId), { status: 'failed', completedAt: serverTimestamp() });
+      }
     } finally {
       setLoading(false);
       setTimeout(() => setStatus(""), 3000);
@@ -268,8 +312,22 @@ const App = () => {
   const startPostScan = async () => {
     if (activeUsernames.length === 0) return;
     setLoading(true);
-    setStatus("Harvesting latest memes...");
+    setStatus("Scanning top IG posts...");
     try {
+      const scanRef = doc(collection(db, 'artifacts', appId, 'scan_history'));
+      await setDoc(scanRef, {
+        type: 'Top IG Posts',
+        activeUsernames,
+        postsPerAccount: Number(postsPerAccount) || 0,
+        lookbackValue: Number(lookbackValue) || 0,
+        lookbackUnit,
+        createdAt: serverTimestamp(),
+        status: 'pending',
+        estimatePrice: scanEstimatePrice,
+      });
+      setCurrentScanDocId(scanRef.id);
+      setSelectedScanId(scanRef.id);
+
       const res = await fetch(`https://api.apify.com/v2/acts/apify~instagram-post-scraper/runs?token=${apifyToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -288,10 +346,19 @@ const App = () => {
   const handleVote = async (post, vote) => {
     const id = post.id || btoa(post.url).replace(/\//g, '_');
     const postRef = doc(db, 'artifacts', appId, 'memes', id);
-    await updateDoc(postRef, { 
-      vote: vote,
-      votedAt: vote === 'down' ? Date.now() : null 
-    });
+    const updatedVote = vote;
+
+    setAllMemes(prev => prev.map(item => (item.id === id || item.url === post.url) ? { ...item, vote: updatedVote } : item));
+    setCurrentScanData(prev => prev.map(item => (item.id === id || item.url === post.url) ? { ...item, vote: updatedVote } : item));
+
+    try {
+      await setDoc(postRef, {
+        vote: updatedVote,
+        votedAt: updatedVote === 'down' ? Date.now() : null
+      }, { merge: true });
+    } catch (e) {
+      setError('Failed to save vote.');
+    }
   };
 
   const unlockApp = async (e) => {
@@ -337,7 +404,7 @@ const App = () => {
       )}
 
       {/* SIDEBAR */}
-      <aside className={`fixed inset-y-0 left-0 lg:static z-[70] h-screen min-h-screen bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden relative ${isSidebarOpen ? 'w-[85vw] max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full lg:translate-x-0 lg:w-80 lg:max-w-none'}`}>
+      <aside className={`fixed inset-y-0 left-0 lg:sticky lg:top-0 z-[70] h-screen min-h-screen bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden relative ${isSidebarOpen ? 'w-[85vw] max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full lg:translate-x-0 lg:w-80 lg:max-w-none'}`}>
         {isSidebarOpen && (
           <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden absolute top-4 right-4 p-2 rounded-xl bg-slate-800/90 text-slate-100 shadow-lg shadow-slate-950/25">
             <X size={18} />
@@ -352,7 +419,7 @@ const App = () => {
           {activeSidebarTab === 'scan' ? (
             <div className="space-y-8">
               <section className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Search size={12}/> Related Discovery</h3>
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Search size={12}/> Step 1 — Find Related Users</h3>
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                   <input 
                     value={relatedTarget} onChange={e => setRelatedTarget(e.target.value)}
@@ -369,15 +436,32 @@ const App = () => {
                   />
                 </div>
                 <div className="mt-3 flex items-center justify-between text-[10px] text-slate-500 uppercase tracking-widest">
-                  <span>{relatedCount.toLocaleString()} related users</span>
+                  <span className="font-black text-slate-400"># Related users</span>
                   <span>${relatedEstimate.toFixed(2)} est.</span>
                 </div>
                 <button onClick={startRelatedScan} className="mt-4 w-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500 hover:text-slate-950 transition-all">Find Related Users</button>
               </section>
 
+              <section className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest"># Related users</h4>
+                  <span className="text-[9px] text-slate-500">{sortedGlobalAccounts.length} accounts</span>
+                </div>
+                <div className="grid gap-2 max-h-72 overflow-y-auto custom-scrollbar">
+                  {sortedGlobalAccounts.map(acc => (
+                    <button key={acc.id} type="button" onClick={() => toggleActiveUsername(acc.username)} className={`w-full text-left p-3 rounded-xl border transition-all ${activeUsernames.includes(acc.username) ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-slate-950/40 border-slate-800/50 hover:border-slate-600'}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[11px] font-black text-white truncate">@{acc.username}</span>
+                        <span className="text-[9px] text-slate-500">{(likedCountsByUsername[acc.username] || 0).toLocaleString()} liked</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
               <section className="space-y-4 pt-4 border-t border-slate-800">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">IG Post Scan</h3>
+                  <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Step 2 — Scan Top IG Posts</h3>
                   <span className="text-[9px] text-slate-600 font-mono italic">{activeUsernames.length} selected</span>
                 </div>
                 <div className="space-y-4">
@@ -401,30 +485,20 @@ const App = () => {
                       <div className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Accounts to scan</div>
                       <span className="text-[9px] text-slate-500">{scanEstimateResults.toLocaleString()} posts</span>
                     </div>
-                    <div className="grid gap-2 max-h-56 overflow-y-auto custom-scrollbar">
-                      {sortedGlobalAccounts.map(acc => (
-                        <button key={acc.id} type="button" onClick={() => toggleActiveUsername(acc.username)} className={`w-full text-left p-3 rounded-xl border transition-all ${activeUsernames.includes(acc.username) ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-slate-950/40 border-slate-800/50 hover:border-slate-600'}`}>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[11px] font-black text-white truncate">@{acc.username}</span>
-                            <span className="text-[9px] text-slate-500">{(likedCountsByUsername[acc.username] || 0).toLocaleString()} liked</span>
-                          </div>
-                        </button>
-                      ))}
+                    <div className="rounded-2xl bg-slate-950/50 border border-slate-800 p-3 text-[10px] text-slate-400">
+                      Estimated price: <span className="text-white">${scanEstimatePrice.toFixed(2)}</span>
                     </div>
-                  </div>
-                  <div className="rounded-2xl bg-slate-950/50 border border-slate-800 p-3 text-[10px] text-slate-400">
-                    Estimated price: <span className="text-white">${scanEstimatePrice.toFixed(2)}</span> (@ ${COST_POST_SCAN.toFixed(2)} / 1000 results)
                   </div>
                 </div>
               </section>
             </div>
           ) : (
-            <div className="space-y-4">
-               <div className="flex items-center justify-between">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Related Accounts</h3>
                 <span className="text-[9px] text-slate-600 font-mono italic">{sortedGlobalAccounts.length} accounts</span>
-               </div>
-               <div className="space-y-1">
+              </div>
+              <div className="space-y-1">
                 {sortedGlobalAccounts.map(acc => (
                   <div key={acc.id} className="flex items-center gap-3 p-3 rounded-xl border bg-slate-950/40 border-slate-800/50">
                     <div className="flex-1 min-w-0">
@@ -433,7 +507,43 @@ const App = () => {
                     </div>
                   </div>
                 ))}
-               </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-800">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Scan History</h3>
+                  <span className="text-[9px] text-slate-600 font-mono italic">{scanHistory.length} scans</span>
+                </div>
+                <div className="grid gap-2 max-h-72 overflow-y-auto custom-scrollbar">
+                  {scanHistory.length > 0 ? scanHistory.map(scan => (
+                    <button key={scan.id} type="button" onClick={() => selectScan(scan.id)} className={`w-full text-left p-3 rounded-2xl border transition-all ${selectedScanId === scan.id ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-slate-950/40 border-slate-800/50 hover:border-slate-600'}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-black text-white truncate">{scan.type || 'Top IG Posts'}</div>
+                          <div className="text-[9px] text-slate-500 truncate">{scan.activeUsernames?.length || 0} accounts · {scan.postCount ?? 'pending'} posts</div>
+                        </div>
+                        <span className="text-[9px] text-slate-500">{scan.status || 'pending'}</span>
+                      </div>
+                    </button>
+                  )) : (
+                    <div className="text-[9px] text-slate-500">No scan history available yet.</div>
+                  )}
+                </div>
+
+                {selectedScan && (
+                  <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 space-y-3">
+                    <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Selected Scan Parameters</div>
+                    <div className="grid gap-2 text-[10px] text-slate-300">
+                      <div className="flex justify-between"><span>Type</span><span>{selectedScan.type}</span></div>
+                      <div className="flex justify-between"><span>Accounts</span><span>{selectedScan.activeUsernames?.length || 0}</span></div>
+                      <div className="flex justify-between"><span>Lookback</span><span>{selectedScan.lookbackValue} {selectedScan.lookbackUnit}</span></div>
+                      <div className="flex justify-between"><span>Posts/User</span><span>{selectedScan.postsPerAccount}</span></div>
+                      <div className="flex justify-between"><span>Status</span><span>{selectedScan.status}</span></div>
+                      <div className="flex justify-between"><span>Posts loaded</span><span>{displayData.length}</span></div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -442,7 +552,7 @@ const App = () => {
           <div className="p-6 border-t border-slate-800">
             <button onClick={startPostScan} disabled={loading || activeUsernames.length === 0} className="w-full bg-emerald-500 text-slate-950 font-black py-4 rounded-2xl flex items-center justify-center gap-3 active:scale-95 disabled:opacity-30 shadow-lg shadow-emerald-500/20">
               {loading ? <Loader2 className="animate-spin" /> : <RefreshCw size={18}/>}
-              <span className="tracking-widest text-[11px] uppercase">Harvest Posts</span>
+              <span className="tracking-widest text-[11px] uppercase">Scan Top IG Posts</span>
             </button>
           </div>
         )}
