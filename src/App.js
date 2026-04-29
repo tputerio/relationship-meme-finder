@@ -57,6 +57,7 @@ const App = () => {
   const [lookbackUnit, setLookbackUnit] = useState('months');
   const [postsPerAccount, setPostsPerAccount] = useState(10);
   const [activeUsernames, setActiveUsernames] = useState([]);
+  const [relatedUsernameInput, setRelatedUsernameInput] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
@@ -173,6 +174,45 @@ const App = () => {
   const toggleActiveUsername = (username) => {
     if (!username) return;
     setActiveUsernames(prev => prev.includes(username) ? prev.filter(u => u !== username) : [...prev, username]);
+  };
+
+  const addRelatedAccount = async () => {
+    const username = String(relatedUsernameInput || '').trim().replace(/^@/, '');
+    if (!username) return;
+    setLoading(true);
+    try {
+      const accountRef = doc(db, 'artifacts', appId, 'related_accounts', username);
+      await setDoc(accountRef, {
+        username,
+        followers: 0,
+        likesCount: 0,
+        lastFound: Date.now(),
+      }, { merge: true });
+      setStatus(`Added @${username} to related accounts.`);
+      setRelatedUsernameInput('');
+    } catch (e) {
+      console.error(e);
+      setError('Unable to add related account.');
+    } finally {
+      setLoading(false);
+      setTimeout(() => setStatus(''), 2500);
+    }
+  };
+
+  const removeRelatedAccount = async (username) => {
+    if (!username) return;
+    setLoading(true);
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'related_accounts', username));
+      setStatus(`Removed @${username} from related accounts.`);
+      setActiveUsernames(prev => prev.filter(u => u !== username));
+    } catch (e) {
+      console.error(e);
+      setError('Unable to remove related account.');
+    } finally {
+      setLoading(false);
+      setTimeout(() => setStatus(''), 2500);
+    }
   };
 
   const selectScan = (scanId) => {
@@ -343,20 +383,48 @@ const App = () => {
     } catch (e) { setError("Scan failed."); setLoading(false); }
   };
 
+  const computeMemeId = (post) => {
+    if (!post) return null;
+    if (post.id) return String(post.id);
+    if (typeof post.url === 'string' && post.url.length > 0) {
+      return btoa(post.url).replace(/\//g, '_');
+    }
+    return null;
+  };
+
   const handleVote = async (post, vote) => {
-    const id = post.id || btoa(post.url).replace(/\//g, '_');
+    const id = computeMemeId(post);
+    if (!id) return;
+    const url = typeof post.url === 'string' ? post.url : null;
     const postRef = doc(db, 'artifacts', appId, 'memes', id);
     const updatedVote = vote;
 
-    setAllMemes(prev => prev.map(item => (item.id === id || item.url === post.url) ? { ...item, vote: updatedVote } : item));
-    setCurrentScanData(prev => prev.map(item => (item.id === id || item.url === post.url) ? { ...item, vote: updatedVote } : item));
+    const updateItem = item => {
+      if (item.id === id || (url && item.url === url)) {
+        return { ...item, vote: updatedVote };
+      }
+      return item;
+    };
+
+    setAllMemes(prev => {
+      const found = prev.some(item => item.id === id || (url && item.url === url));
+      return found ? prev.map(updateItem) : [...prev, { ...post, id, vote: updatedVote }];
+    });
+
+    setCurrentScanData(prev => {
+      const found = prev.some(item => item.id === id || (url && item.url === url));
+      return found ? prev.map(updateItem) : [...prev, { ...post, id, vote: updatedVote }];
+    });
 
     try {
       await setDoc(postRef, {
         vote: updatedVote,
         votedAt: updatedVote === 'down' ? Date.now() : null
       }, { merge: true });
+      setStatus(updatedVote === 'down' ? 'Post marked as disliked.' : updatedVote === 'up' ? 'Post marked as liked.' : 'Vote removed.');
+      setTimeout(() => setStatus(''), 2500);
     } catch (e) {
+      console.error('Vote save error:', e);
       setError('Failed to save vote.');
     }
   };
@@ -397,14 +465,14 @@ const App = () => {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-950 text-slate-100 overflow-hidden overflow-x-hidden font-sans">
+    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden overflow-x-hidden font-sans">
       {/* MOBILE OVERLAY */}
       {isSidebarOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] lg:hidden" onClick={() => setIsSidebarOpen(false)} />
       )}
 
       {/* SIDEBAR */}
-      <aside className={`fixed inset-y-0 left-0 lg:sticky lg:top-0 z-[70] h-screen min-h-screen bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden relative ${isSidebarOpen ? 'w-[85vw] max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full lg:translate-x-0 lg:w-80 lg:max-w-none'}`}>
+      <aside className={`fixed inset-y-0 left-0 lg:sticky lg:top-0 z-[70] h-screen bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden lg:overflow-y-auto relative ${isSidebarOpen ? 'w-[85vw] max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full lg:translate-x-0 lg:w-80 lg:max-w-none'}`}>
         {isSidebarOpen && (
           <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden absolute top-4 right-4 p-2 rounded-xl bg-slate-800/90 text-slate-100 shadow-lg shadow-slate-950/25">
             <X size={18} />
@@ -498,6 +566,24 @@ const App = () => {
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Related Accounts</h3>
                 <span className="text-[9px] text-slate-600 font-mono italic">{sortedGlobalAccounts.length} accounts</span>
               </div>
+              <div className="bg-slate-950/50 p-4 rounded-2xl border border-slate-800/50">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={relatedUsernameInput}
+                    onChange={e => setRelatedUsernameInput(e.target.value)}
+                    placeholder="@username"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={addRelatedAccount}
+                    className="bg-emerald-500 text-slate-950 rounded-xl px-4 py-3 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-400 transition-all"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
               <div className="space-y-1">
                 {sortedGlobalAccounts.map(acc => (
                   <div key={acc.id} className="flex items-center gap-3 p-3 rounded-xl border bg-slate-950/40 border-slate-800/50">
@@ -505,6 +591,13 @@ const App = () => {
                       <div className="text-[11px] font-black text-white truncate">@{acc.username}</div>
                       <div className="text-[9px] text-slate-500 font-mono">{(likedCountsByUsername[acc.username] || 0).toLocaleString()} liked posts</div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => removeRelatedAccount(acc.username)}
+                      className="text-[9px] font-black uppercase tracking-widest text-red-400 hover:text-red-300"
+                    >
+                      Remove
+                    </button>
                   </div>
                 ))}
               </div>
